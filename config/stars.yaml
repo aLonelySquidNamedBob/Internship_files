@@ -1,0 +1,75 @@
+---
+
+version: 1
+
+stars:
+  HD115444:
+    name: "HD 115444"
+    spectra:
+      raw:
+        - "data/observed_spectra/HD115444/HD115444.coadd"
+      normalized:
+        - "data/normalized_spectra/HD115444_normalized.coadd.csv"
+
+    synthesis:
+      model_atmosphere: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+      departure_coefficients: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_4.48_dc.dat"
+      interpolated: "True"
+      
+      NLTE_element: "Fe"
+      NLTE_abundance: 4.48
+
+      metallicity: -2.97
+      alpha_fe: 0.40
+      vmic: null # default is 1
+
+    notes: null
+
+  HD196944:
+    name: "HD 196944"
+    spectra:
+      raw:
+        - "data/observed_spectra/HD196944/HD196944.coadd"
+      normalized:
+        - "data/normalized_spectra/HD196944_normalized.coadd.csv"
+      alternatives:
+        - "data/observed_spectra/HD196944/196944-coadd-3800-4500.bak"
+        - "data/observed_spectra/HD196944/196944.coadd.bak"
+        - "data/observed_spectra/HD196944/196944-coadd-full-spectrum.bak"
+      
+    synthesis:
+      model_atmosphere: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+      departure_coefficients: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
+      interpolated: "True"
+
+      NLTE_element: "Fe"
+      NLTE_abundance: 5.50
+      
+      metallicity: -1.95
+      alpha_fe: 0.40
+      vmic: null # default is 1
+
+    notes: "Several alternative or backup reductions are available."
+
+    
+  TIC396792499:
+    name: "TIC 396792499"
+    spectra:
+      raw:
+        - None
+      normalized:
+        - None
+      
+    synthesis:
+      model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+      departure_coefficients: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
+      interpolated: "True"
+
+      NLTE_element: "Fe"
+      NLTE_abundance: 5.40
+      
+      metallicity: -2.05
+      alpha_fe: 0.40
+      vmic: null # default is 1
+
+    notes: "Several alternative or backup reductions are available."

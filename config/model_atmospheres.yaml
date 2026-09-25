@@ -1,0 +1,9 @@
+version: 1
+
+model_atmospheres:
+  global_path: /home/student/NICO/test/test1/atm
+
+  HD115444_marcs:
+    path: c-0.25/MARCS_st_sph_t02_mod/s4750_g+1.5_m1.0_t02_x3_z-2.50_a+0.50_c-0.25_n+0.00_o+0.50_r+0.00_s+0.00.mod
+    
+
