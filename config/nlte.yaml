@@ -1,0 +1,17 @@
+---
+
+version: 1
+
+element:
+  Fe:
+    atomic_number: 26
+    model_atom: "atom.fe607a"
+    model_atom_path: "/home/student/NICO/data/original/NLTE/dc/Fe"
+    global_departure_coefficients: "/home/student/NICO/data/original/NLTE/dc/Fe/NLTEgrid4TS_Fe_MARCS_May-07-2021.bin"
+
+
+  Ba:
+    atomic_number: 56
+    model_atom: "atom.ba111"
+    model_atom_path: "/home/student/NICO/data/original/NLTE/MODEL_ATOM/Ba/"
+    global_departure_coefficients: null

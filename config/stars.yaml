@@ -13,8 +13,9 @@ stars:
 
     synthesis:
       model_atmosphere: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-      departure_coefficients: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_4.48_dc.dat"
-      interpolated: "True"
+      departure_coefficients_path: "data/interpolated/HD115444/"
+      departure_coefficients: "s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_4.48_dc.dat"
+      interpolated: true
       
       NLTE_element: "Fe"
       NLTE_abundance: 4.48
@@ -39,8 +40,9 @@ stars:
       
     synthesis:
       model_atmosphere: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-      departure_coefficients: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
-      interpolated: "True"
+      departure_coefficients_path: "data/interpolated/HD196944/"
+      departure_coefficients: "s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
+      interpolated: true
 
       NLTE_element: "Fe"
       NLTE_abundance: 5.50
@@ -56,14 +58,14 @@ stars:
     name: "TIC 396792499"
     spectra:
       raw:
-        - None
+        - null
       normalized:
-        - None
+        - null
       
     synthesis:
       model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
       departure_coefficients: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
-      interpolated: "True"
+      interpolated: true
 
       NLTE_element: "Fe"
       NLTE_abundance: 5.40
