@@ -24,6 +24,14 @@ stars:
       alpha_fe: 0.40
       vmic: null # default is 1
 
+      molecular_line_lists:
+        - "CC"
+        - "CN"
+        - "CH"
+        - "OH"
+        - "MgH"
+        - "SiH"
+
     notes: null
 
   HD196944:
@@ -51,6 +59,16 @@ stars:
       alpha_fe: 0.40
       vmic: null # default is 1
 
+      molecular_line_lists:
+        - "CC"
+        - "CN"
+        - "CH"
+        - "NH"
+        - "OH"
+        - "MgH"
+        - "SiH"
+        - "CaH"
+
     notes: "Several alternative or backup reductions are available."
 
     
@@ -73,5 +91,15 @@ stars:
       metallicity: -2.05
       alpha_fe: 0.40
       vmic: null # default is 1
+
+      molecular_line_lists:
+        - "CC"
+        - "CN"
+        - "CH"
+        - "OH"
+        - "MgH"
+        - "SiH"
+        - "TiO"
+        - "CaH"
 
     notes: "Several alternative or backup reductions are available."

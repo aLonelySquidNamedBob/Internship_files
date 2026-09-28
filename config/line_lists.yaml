@@ -1,0 +1,57 @@
+--- 
+
+version: 1
+
+master: "/home/student/NICO/ll/nlte_ges_linelist_jmg6may2025_I_II"
+
+molecular:
+  CC:
+    - "/home/student/NICO/ll/molecules/12C12C_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/12C13C_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/13C13C_GESv5.bsyn"
+
+  CN:
+    - "/home/student/NICO/ll/molecules/12C14N_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/12C15N_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/13C14N_GESv5.bsyn"
+
+  CH:
+    - "/home/student/NICO/ll/molecules/12CH_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/13CH_GESv5.bsyn"
+
+  NH:
+    - "/home/student/NICO/ll/molecules/14NH_GESv5.bsyn"
+
+  OH:
+    - "/home/student/NICO/ll/molecules/16OH_GESv5.bsyn"
+
+  MgH:
+    - "/home/student/NICO/ll/molecules/24MgH_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/26MgH_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/25MgH_GESv5.bsyn"
+
+  SiH:
+    - "/home/student/NICO/ll/molecules/28SiH_GESv5.bsyn"
+
+  TiO:
+    - "/home/student/NICO/ll/molecules/46TiO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/47TiO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/48TiO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/49TiO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/50TiO_GESv5.bsyn"
+
+  ZrO:
+    - "/home/student/NICO/ll/molecules/90ZrO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/91ZrO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/92ZrO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/94ZrO_GESv5.bsyn"
+    - "/home/student/NICO/ll/molecules/96ZrO_GESv5.bsyn"
+
+  CaH:
+    - "/home/student/NICO/ll/molecules/CaH_GESv5.bsyn"
+
+  FeH:
+    - "/home/student/NICO/ll/molecules/FeH_GESv5.bsyn"
+
+  VO:
+    - "/home/student/NICO/ll/molecules/VO_GESv5.bsyn"
