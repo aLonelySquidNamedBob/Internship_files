@@ -1,8 +1,6 @@
---- 
-
-version: 1
-
-master: "/home/student/NICO/ll/nlte_ges_linelist_jmg6may2025_I_II"
+master: 
+  - "/home/student/NICO/ll/nlte_ges_linelist_jmg6may2025_I_II"
+  - "/home/student/NICO/DATA/Hlinedata"
 
 molecular:
   CC:

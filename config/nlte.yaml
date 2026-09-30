@@ -1,7 +1,3 @@
----
-
-version: 1
-
 element:
   Fe:
     atomic_number: 26

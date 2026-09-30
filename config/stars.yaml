@@ -1,78 +1,120 @@
----
+HD115444:
+  name: "HD 115444"
+  spectra:
+    raw:
+      - "data/observed_spectra/HD115444/HD115444.coadd"
+    normalized:
+      - "data/normalized_spectra/HD115444_normalized.coadd.csv"
 
-version: 1
-
-stars:
-  HD115444:
-    name: "HD 115444"
-    spectra:
-      raw:
-        - "data/observed_spectra/HD115444/HD115444.coadd"
-      normalized:
-        - "data/normalized_spectra/HD115444_normalized.coadd.csv"
-
-    synthesis:
-      model_atmosphere: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-      departure_coefficients_path: "data/interpolated/HD115444/"
-      departure_coefficients: "s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_4.48_dc.dat"
-      interpolated: true
-      
-      NLTE_element: "Fe"
-      NLTE_abundance: 4.48
-
-      metallicity: -2.97
-      alpha_fe: 0.40
-      vmic: null # default is 1
-
-      molecular_line_lists:
-        - "CC"
-        - "CN"
-        - "CH"
-        - "OH"
-        - "MgH"
-        - "SiH"
-
-    notes: null
-
-  HD196944:
-    name: "HD 196944"
-    spectra:
-      raw:
-        - "data/observed_spectra/HD196944/HD196944.coadd"
-      normalized:
-        - "data/normalized_spectra/HD196944_normalized.coadd.csv"
-      alternatives:
-        - "data/observed_spectra/HD196944/196944-coadd-3800-4500.bak"
-        - "data/observed_spectra/HD196944/196944.coadd.bak"
-        - "data/observed_spectra/HD196944/196944-coadd-full-spectrum.bak"
-      
-    synthesis:
-      model_atmosphere: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-      departure_coefficients_path: "data/interpolated/HD196944/"
-      departure_coefficients: "s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
-      interpolated: true
-
-      NLTE_element: "Fe"
-      NLTE_abundance: 5.50
-      
-      metallicity: -1.95
-      alpha_fe: 0.40
-      vmic: null # default is 1
-
-      molecular_line_lists:
-        - "CC"
-        - "CN"
-        - "CH"
-        - "NH"
-        - "OH"
-        - "MgH"
-        - "SiH"
-        - "CaH"
-
-    notes: "Several alternative or backup reductions are available."
-
+  synthesis:
+    model_atmosphere: "data/interpolated/HD115444/s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+    departure_coefficients_path: "data/interpolated/HD115444/"
+    departure_coefficients: "s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_4.48_dc.dat"
+    interpolated: true
     
-  TIC396792499:
+    NLTE_element: "Fe"
+    NLTE_abundance: 4.48
+
+    metallicity: -2.97
+    alpha_fe: 0.40
+    vmic: null # default is 1
+
+    molecular_line_lists:
+      - "CC"
+      - "CN"
+      - "CH"
+      - "OH"
+      - "MgH"
+      - "SiH"
+
+  notes: null
+
+HD196944:
+  name: "HD 196944"
+  spectra:
+    raw:
+      - "data/observed_spectra/HD196944/HD196944.coadd"
+    normalized:
+      - "data/normalized_spectra/HD196944_normalized.coadd.csv"
+    alternatives:
+      - "data/observed_spectra/HD196944/196944-coadd-3800-4500.bak"
+      - "data/observed_spectra/HD196944/196944.coadd.bak"
+      - "data/observed_spectra/HD196944/196944-coadd-full-spectrum.bak"
+    
+  synthesis:
+    model_atmosphere: "data/interpolated/HD196944/s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+    departure_coefficients_path: "data/interpolated/HD196944/"
+    departure_coefficients: "s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
+    interpolated: true
+
+    NLTE_element: "Fe"
+    NLTE_abundance: 5.50
+    
+    metallicity: -1.95
+    alpha_fe: 0.40
+    vmic: null # default is 1
+
+    molecular_line_lists:
+      - "CC"
+      - "CN"
+      - "CH"
+      - "NH"
+      - "OH"
+      - "MgH"
+      - "SiH"
+      - "CaH"
+
+  notes: "Several alternative or backup reductions are available."
+  
+HD2454:
+  name: "HD 2454"
+  spectra:
+    raw:
+      - "data/observed_spectra/HD2454/2454_all.coadd"
+    normalized:
+      - "data/normalized_spectra/HD2454_normalised.coadd.csv"
+    
+  synthesis:
+    model_atmosphere: "data/interpolated/HD2454/p6565_g+4.1_m0.0_t01_st_z-0.21_a+0.08_c+0.00_n+0.00_o+0.08_r+0.00_s+0.00.int"
+    departure_coefficients: "data/interpolated/HD2454/p6565_g+4.1_m0.0_t01_st_z-0.21_a+0.08_c+0.00_n+0.00_o+0.08_r+0.00_s+0.00_Fe_7.24_dc.dat"
+    interpolated: true
+
+    NLTE_element: "Fe"
+    NLTE_abundance: 7.24
+    
+    metallicity: -0.21
+    alpha_fe: 0.08
+    vmic: null # default is 1
+
+    molecular_line_lists: null
+
+  notes: null
+  
+HE22081239:
+  name: "HE 2208-1239"
+  spectra:
+    raw:
+      - null
+    normalized:
+      - null
+    
+  synthesis:
+    model_atmosphere: "data/interpolated/HE22081239/s5200_g+2.1_m1.0_t02_st_z-2.40_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+    departure_coefficients: "data/interpolated/HE22081239/s5200_g+2.1_m1.0_t02_st_z-2.40_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.05_dc.dat"
+    interpolated: true
+
+    NLTE_element: "Fe"
+    NLTE_abundance: 5.05
+    
+    metallicity: -2.40
+    alpha_fe: 0.40
+    vmic: null # default is 1
+
+    molecular_line_lists:
+
+  notes: null
+  
+TIC396792499:
     name: "TIC 396792499"
     spectra:
       raw:
