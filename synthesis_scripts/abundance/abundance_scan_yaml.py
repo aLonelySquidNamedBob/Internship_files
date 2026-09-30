@@ -16,13 +16,15 @@ working_dir = home / "test" / "test1"       # test1 directory
 
 # Program paths
 turbospectrum = Path("~/NICO/Turbospectrum_NLTE_20.1").expanduser()
-babsma = turbospectrum / "exec-gf/babsma_lu"
-bsyn = turbospectrum / "exec-gf/bsyn_lu"
+babsma  = turbospectrum / "exec-gf/babsma_lu"
+bsyn    = turbospectrum / "exec-gf/bsyn_lu"
 faltbon = turbospectrum / "Utilities/faltbon"
-log = working_dir / "log.txt"
+log     = working_dir / "log.txt"
 
+# Config files
 config_file = Path("config/stars.yaml")
 nlte_config_file = Path("config/nlte.yaml")
+line_list_file = Path("config/line_lists.yaml")
 
 with config_file.open() as f:
     config: dict[str, dict[str, str]] = yaml.safe_load(f)
@@ -30,22 +32,26 @@ with config_file.open() as f:
 with nlte_config_file.open() as f:
     nlte_config: dict[str, dict[str, str]] = yaml.safe_load(f)
 
+with line_list_file.open() as f:
+    line_list_config: dict[str, dict[str, str]] = yaml.safe_load(f)
+
 # stars = ["HD115444", "HD196944", "TIC396792499"]
-stars = list(config["stars"].keys())
+stars = list(config.keys())
 selected_star = stars[1]  # Change this to select a different star
 
-line = 5194
+line = 5194.9414
 wmin = line - 10
 wmax = line + 10
 dw = 0.01  # wavelength step
 
 
 # Departure coefficients
-elt = config["stars"][selected_star]["synthesis"]["NLTE_element"]
-Z = nlte_config["element"][elt]["atomic_number"]
-atom_path = Path(f"{nlte_config['element'][elt]['model_atom_path']}")
-dc_path = home / f"{config['stars'][selected_star]['synthesis']['departure_coefficients_path']}"
-dc = dc_path / config["stars"][selected_star]["synthesis"]["departure_coefficients"]
+elt         = config[selected_star]["synthesis"]["NLTE_element"]
+Z           = nlte_config["element"][elt]["atomic_number"]
+model_atom  = nlte_config["element"][elt]["model_atom"]
+atom_path   = Path(f"{nlte_config['element'][elt]['model_atom_path']}")
+dc_path     = home / f"{config['stars'][selected_star]['synthesis']['departure_coefficients_path']}"
+dc          = dc_path / config[selected_star]["synthesis"]["departure_coefficients"]
 
 
 # ['F']: LTE, ['T']: NLTE
@@ -57,7 +63,7 @@ sspath = home / "runs" / selected_star / "abundance_tests" / f"Fe_{line}"  # syn
 copath = home / "runs" / selected_star / "abundance_tests" / f"Fe_{line}" / "co"       # continuous opacity path
 # atm_dir = mpath / "c-0.25/MARCS_st_sph_t02_mod"
 # atm = "s4750_g+1.5_m1.0_t02_x3_z-2.50_a+0.50_c-0.25_n+0.00_o+0.50_r+0.00_s+0.00.mod"
-atm = home / f"{config["stars"][selected_star]["synthesis"]["model_atmosphere"]}"
+atm = home / f"{config[selected_star]["synthesis"]["model_atmosphere"]}"
 marcs_original = ".false."
 
 sspath.mkdir(parents=True, exist_ok=True)
@@ -67,17 +73,18 @@ copath.mkdir(parents=True, exist_ok=True)
 vmic = 1.0
 feoh = -2.05
 aoh = +0.40
-Fe_abus = ["5.40", "6.40"]
+Fe_abus = ["0"]
 
 # Linelists
-# lls = [working_dir / "ll/GESv6/ges_master_v6_t1.txt_atoms.bsyn"]
-default_lls = [
-    working_dir / "DATA" / "Hlinedata",
-]
-mol_lls = [
+default_lls: list[Path] = line_list_config["master"]
 
-]
-lls = [home / "ll" / "nlte_ges_linelist_jmg6may2025_I_II"]
+mol_lls = []
+for mol_ll in config[selected_star]["synthesis"]["molecular_line_lists"]:
+    mol_lls.extend(ll for ll in line_list_config["molecular"][mol_ll])
+
+effective_ll = default_lls + mol_lls
+effective_ll = [Path(ll) for ll in effective_ll]
+line_list_block = "\n".join(str(ll) for ll in effective_ll)
 
 # Ba isotopic mixtures
 Ba_mixtures = {
@@ -113,7 +120,7 @@ if segment:
 nlte_ifn = working_dir / "DATA/nlte_infofile.dat"
 nlte_ifn.parent.mkdir(parents=True, exist_ok=True)
 
-record = f"{Z} '{elt}' 'nlte' 'atom.fe607a' '{dc.name}' 'ascii'"
+record = f"{Z} '{elt}' 'nlte' '{model_atom}' '{dc.name}' 'ascii'"
 
 nlte_ifn.write_text(
     "#\n"
@@ -148,9 +155,28 @@ def run_program(program: Path, input_text: str, log_file: Path, append=False):
 # Save Configuration
 # ---------------------------------------------------------------------------
 
+run_config = {
+    "star": selected_star,
+    "wavelength_range": (wmin, wmax),
+    "wavelength_step": dw,
+    "model_atmosphere": atm.name,
+    "departure_coefficients": dc.name,
+    "nlte_element": elt,
+    "nlte": nltes,
+    "metallicity": feoh,
+    "alpha_enhancement": aoh,
+    "vmic": vmic,
+    "Fe_abundances": Fe_abus,
+    "default_line_lists": [str(ll) for ll in default_lls],
+    "molecular_line_lists": [str(ll) for ll in mol_lls],
+}
+
+with (sspath / "run_config.yaml").open("w") as f:
+    yaml.dump(run_config, f)
+
 config_save_path = sspath / "config.yaml"
 with config_save_path.open("w") as f:
-    yaml.dump(config["stars"][selected_star], f)
+    yaml.dump(config[selected_star], f)
 
 # ---------------------------------------------------------------------------
 # babsma: Continuous opacity calculations
@@ -210,23 +236,21 @@ for i, mixture in Ba_mixtures.items():
 
     Ba_134, Ba_135, Ba_136, Ba_137, Ba_138 = isotope_values
 
-    for ll in lls:
-        for nlte in nltes:
-            for abu in Fe_abus:
+    # for ll in lls:
+    for nlte in nltes:
+        for abu in Fe_abus:
 
-                # Synthetic spectrum output filename
-                # Bash calculated str/fmt_abu but did not use them in ofn.
-                prefix = f"{abu}_{wmin}-{wmax}_nlte-{nlte}_"
-                ofn = prefix + atm.name.replace(".int", "") + ".spec"
+            # Synthetic spectrum output filename
+            # Bash calculated str/fmt_abu but did not use them in ofn.
+            prefix = f"{abu}_{wmin}-{wmax}_nlte-{nlte}_"
+            ofn = prefix + atm.name.replace(".int", "") + ".spec"
 
-                print(
-                    f"bsyn for NLTE {nlte}, A({elt}) = {abu}, "
-                    f"isotopic mixture {i}"
-                )
+            print(
+                f"bsyn for NLTE {nlte}, A({elt}) = {abu}, "
+                f"isotopic mixture {i}"
+            )
 
-                effective_ll = default_lls + [ll]
-
-                bsyn_input = f"""\
+            bsyn_input = f"""\
 ###########
 # Use NLTE if true. Source function is computed with departure coefficients
 # from departure coefficient file for the atom in model atom file, if they
@@ -290,9 +314,8 @@ for i, mixture in Ba_mixtures.items():
 ###########
 # line lists. First how many there are, and then the list of lists
 #
-'NFILES   :' '2'
-{working_dir / "DATA" / "Hlinedata"}
-{ll}
+'NFILES   :' '{len(effective_ll)}'
+{line_list_block}
 ###########
 # spherical (T) or plane-parallel (F) radiative transfer.
 # If spherical, a few more parameters are read
@@ -305,12 +328,12 @@ for i, mixture in Ba_mixtures.items():
   1.30
 """
 
-                run_program(bsyn, bsyn_input, log, append=True)
+            run_program(bsyn, bsyn_input, log, append=True)
 
-                print(ofn)
+            print(ofn)
 
-                cvl_name = ofn.replace(".spec", "_hermes.cvl")
-                faltbon_input = f"""\
+            cvl_name = ofn.replace(".spec", "_hermes.cvl")
+            faltbon_input = f"""\
 {sspath / ofn}
 {sspath / cvl_name}
 -7.5  FWHM OF CONVOLU.PROFILE=  MILLIANGSTROM, OR KM/S IF < 0.
@@ -319,7 +342,7 @@ for i, mixture in Ba_mixtures.items():
 1 NBIN = (1 = NO IN BIN )
 """
 
-                run_program(faltbon, faltbon_input, log, append=True)
+            run_program(faltbon, faltbon_input, log, append=True)
 
 # ---------------------------------------------------------------------------
 # Cleanup / organisation
