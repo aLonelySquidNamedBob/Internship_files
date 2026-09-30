@@ -18,12 +18,12 @@ dw = 0.02  # wavelength step
 # Paths
 home = Path("~/NICO").expanduser()
 working_dir = home / "test" / "test1"       # test1 directory
-mpath = Path("/home/student/NICO/data/interpolated/HD196944/")       # model atmospheres path
+mpath = Path("/home/student/NICO/data/interpolated/TIC396792499/")       # model atmospheres path
 copath = working_dir / "co"       # continuous opacity path
 
 # Departure coefficients
 atom_path = Path("/home/student/NICO/data/original/NLTE/dc/Fe")
-dc_path = Path("/home/student/NICO/data/interpolated/HD196944/")
+dc_path = Path("/home/student/NICO/data/interpolated/TIC396792499/")
 elt = "Fe"
 Z = 26
 
@@ -38,20 +38,20 @@ log = working_dir / "log.txt"
 nltes = ["T"]
 
 # To change
-sspath = home / "runs" / "HD196944" / "molecular_tests"  # synthetic spectra path
+sspath = home / "runs" / "TIC396792499" / "molecular_tests" / "3800-9000"  # synthetic spectra path
 # atm_dir = mpath / "c-0.25/MARCS_st_sph_t02_mod"
 # atm = "s4750_g+1.5_m1.0_t02_x3_z-2.50_a+0.50_c-0.25_n+0.00_o+0.50_r+0.00_s+0.00.mod"
 atm_dir = mpath
 #atm = "sun_marcs.mod"
 # atm = "s4667_g+1.3_m1.0_t02_st_z-2.97_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-atm = "s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+atm = "s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
 marcs_original = ".false."
 #dc = "p5777_g+4.4_m0.0_t01_st_z+0.00_a+0.00_c+0.00_n+0.00_o+0.00_r+0.00_s+0.00_Ba_2.27_dc.dat"
-dc = "s5539_g+2.4_m1.0_t02_st_z-1.95_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.50_dc.dat"
+dc = "s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
 vmic = 1.0
-feoh = -1.95
+feoh = -2.05
 aoh = +0.40
-Fe_abus = ["5.50"]
+Fe_abus = ["5.40"]
 
 # Linelists
 # lls = [working_dir / "ll/GESv6/ges_master_v6_t1.txt_atoms.bsyn"]
@@ -64,7 +64,7 @@ lls = [working_dir / "ll/nlte_ges_linelist_jmg6may2025_I_II"]
 mol_lls = sorted(os.listdir(home / "ll/molecules"))
 mol_lls = [home / "ll/molecules" / ll for ll in mol_lls]
 mol_lls.append("")  # reference run
-# mol_lls = [""]
+mol_lls.append(Path("/home/student/NICO/TiO_ll/47TiO-bsyn_3000-8900_lab.list"))
 
 # select the molecular line lists with CC, CN, CH, OH, MgH, SiH, TiO, CaH
 # selected_mol_lls = [
