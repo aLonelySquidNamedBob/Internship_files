@@ -12,14 +12,13 @@ import yaml
 
 # Paths
 home = Path("~/NICO").expanduser()
-working_dir = home / "test" / "test1"       # test1 directory
 
 # Program paths
 turbospectrum = Path("~/NICO/Turbospectrum_NLTE_20.1").expanduser()
 babsma  = turbospectrum / "exec-gf/babsma_lu"
 bsyn    = turbospectrum / "exec-gf/bsyn_lu"
 faltbon = turbospectrum / "Utilities/faltbon"
-log     = working_dir / "log.txt"
+log     = home / "log.txt"
 
 # Config files
 config_file = Path("config/stars.yaml")
@@ -50,7 +49,7 @@ elt         = config[selected_star]["synthesis"]["NLTE_element"]
 Z           = nlte_config["element"][elt]["atomic_number"]
 model_atom  = nlte_config["element"][elt]["model_atom"]
 atom_path   = Path(f"{nlte_config['element'][elt]['model_atom_path']}")
-dc_path     = home / f"{config['stars'][selected_star]['synthesis']['departure_coefficients_path']}"
+dc_path     = home / f"{config[selected_star]['synthesis']['departure_coefficients_path']}"
 dc          = dc_path / config[selected_star]["synthesis"]["departure_coefficients"]
 
 
@@ -86,19 +85,10 @@ effective_ll = default_lls + mol_lls
 effective_ll = [Path(ll) for ll in effective_ll]
 line_list_block = "\n".join(str(ll) for ll in effective_ll)
 
-# Ba isotopic mixtures
-Ba_mixtures = {
-    0: "0.0242 0.0661 0.0787 0.1126 0.7184",  # Solar
-    # 1: "0.0105 0.0187 0.1273 0.3289 0.5146",  # Spallation
-    # 2: "0.0001 0.1325 0.0037 0.5431 0.3207",  # i process
-    # 3: "0.0000 0.3924 0.0000 0.2690 0.3386",  # r process
-    # 4: "0.0286 0.0222 0.0939 0.1048 0.7505",  # s process
-}
-
 # Segment file
 segment = False
 
-segments_file = working_dir / "wavelength_segments.dat"
+segments_file = home / "wavelength_segments.dat"
 
 segments = [
     (4549.033, 4559.033),  # Ba II 4554.033 Å
@@ -117,7 +107,7 @@ if segment:
 # NLTE information file
 # ---------------------------------------------------------------------------
 
-nlte_ifn = working_dir / "DATA/nlte_infofile.dat"
+nlte_ifn = home / "DATA" / "nlte_infofile.dat"
 nlte_ifn.parent.mkdir(parents=True, exist_ok=True)
 
 record = f"{Z} '{elt}' 'nlte' '{model_atom}' '{dc.name}' 'ascii'"
@@ -146,7 +136,7 @@ def run_program(program: Path, input_text: str, log_file: Path, append=False):
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             check=True,
-            cwd=working_dir,
+            cwd=home,
         )
         # print(f"input text: \n{input_text}")
 
@@ -228,29 +218,21 @@ run_program(babsma, babsma_input, log, append=False)
 # bsyn (Spectral synth) + faltbon (Convolution)
 # ---------------------------------------------------------------------------
 
-for i, mixture in Ba_mixtures.items():
-    isotope_values = mixture.split()
 
-    if len(isotope_values) != 5:
-        raise ValueError(f"Ba mixture {i} must contain exactly 5 isotope fractions")
+# for ll in lls:
+for nlte in nltes:
+    for abu in Fe_abus:
 
-    Ba_134, Ba_135, Ba_136, Ba_137, Ba_138 = isotope_values
+        # Synthetic spectrum output filename
+        # Bash calculated str/fmt_abu but did not use them in ofn.
+        prefix = f"{abu}_{wmin}-{wmax}_nlte-{nlte}_"
+        ofn = prefix + atm.name.replace(".int", "") + ".spec"
 
-    # for ll in lls:
-    for nlte in nltes:
-        for abu in Fe_abus:
+        print(
+            f"bsyn for NLTE {nlte}, A({elt}) = {abu}"
+        )
 
-            # Synthetic spectrum output filename
-            # Bash calculated str/fmt_abu but did not use them in ofn.
-            prefix = f"{abu}_{wmin}-{wmax}_nlte-{nlte}_"
-            ofn = prefix + atm.name.replace(".int", "") + ".spec"
-
-            print(
-                f"bsyn for NLTE {nlte}, A({elt}) = {abu}, "
-                f"isotopic mixture {i}"
-            )
-
-            bsyn_input = f"""\
+        bsyn_input = f"""\
 ###########
 # Use NLTE if true. Source function is computed with departure coefficients
 # from departure coefficient file for the atom in model atom file, if they
@@ -305,12 +287,7 @@ for i, mixture in Ba_mixtures.items():
 # 26  7.46
 # 22  2.00
 # 24  2.30
-'ISOTOPES : ' '5'
-56.134 {Ba_134}
-56.135 {Ba_135}
-56.136 {Ba_136}
-56.137 {Ba_137}
-56.138 {Ba_138}
+'ISOTOPES : ' '0'
 ###########
 # line lists. First how many there are, and then the list of lists
 #
@@ -328,12 +305,12 @@ for i, mixture in Ba_mixtures.items():
   1.30
 """
 
-            run_program(bsyn, bsyn_input, log, append=True)
+        run_program(bsyn, bsyn_input, log, append=True)
 
-            print(ofn)
+        print(ofn)
 
-            cvl_name = ofn.replace(".spec", "_hermes.cvl")
-            faltbon_input = f"""\
+        cvl_name = ofn.replace(".spec", "_hermes.cvl")
+        faltbon_input = f"""\
 {sspath / ofn}
 {sspath / cvl_name}
 -7.5  FWHM OF CONVOLU.PROFILE=  MILLIANGSTROM, OR KM/S IF < 0.
@@ -342,14 +319,14 @@ for i, mixture in Ba_mixtures.items():
 1 NBIN = (1 = NO IN BIN )
 """
 
-            run_program(faltbon, faltbon_input, log, append=True)
+        run_program(faltbon, faltbon_input, log, append=True)
 
 # ---------------------------------------------------------------------------
 # Cleanup / organisation
 # ---------------------------------------------------------------------------
 
 for filename in ["dummy-output.dat", "radius_tau1.txt"]:
-    path = working_dir / filename
+    path = home / filename
     if path.exists():
         path.unlink()
 
