@@ -17,6 +17,7 @@ HD115444:
 
     metallicity: -2.97
     alpha_fe: 0.40
+    abu_c: 5.02
     vmic: null # default is 1
 
     molecular_line_lists:
@@ -52,6 +53,7 @@ HD196944:
     
     metallicity: -1.95
     alpha_fe: 0.40
+    abu_c: 7.46
     vmic: null # default is 1
 
     molecular_line_lists:
@@ -84,6 +86,7 @@ HD2454:
     
     metallicity: -0.21
     alpha_fe: 0.08
+    abu_c: 8.21
     vmic: null # default is 1
 
     molecular_line_lists: null
@@ -108,6 +111,7 @@ HE22081239:
     
     metallicity: -2.40
     alpha_fe: 0.40
+    abu_c: 7.31
     vmic: null # default is 1
 
     molecular_line_lists:
@@ -115,33 +119,34 @@ HE22081239:
   notes: null
   
 TIC396792499:
-    name: "TIC 396792499"
-    spectra:
-      raw:
-        - null
-      normalized:
-        - null
-      
-    synthesis:
-      model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-      departure_coefficients: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
-      interpolated: true
+  name: "TIC 396792499"
+  spectra:
+    raw:
+      - null
+    normalized:
+      - null
+    
+  synthesis:
+    model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+    departure_coefficients: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
+    interpolated: true
 
-      NLTE_element: "Fe"
-      NLTE_abundance: 5.40
-      
-      metallicity: -2.05
-      alpha_fe: 0.40
-      vmic: null # default is 1
+    NLTE_element: "Fe"
+    NLTE_abundance: 5.40
+    
+    metallicity: -2.05
+    alpha_fe: 0.40
+    abu_c: 7.30
+    vmic: null # default is 1
 
-      molecular_line_lists:
-        - "CC"
-        - "CN"
-        - "CH"
-        - "OH"
-        - "MgH"
-        - "SiH"
-        - "TiO"
-        - "CaH"
+    molecular_line_lists:
+      - "CC"
+      - "CN"
+      - "CH"
+      - "OH"
+      - "MgH"
+      - "SiH"
+      - "TiO"
+      - "CaH"
 
-    notes: "Several alternative or backup reductions are available."
+  notes: "Several alternative or backup reductions are available."

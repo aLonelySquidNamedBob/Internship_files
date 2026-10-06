@@ -20,3 +20,4 @@ data
 TiO.tar
 TiO_ll
 log.txt
+__pycache__
