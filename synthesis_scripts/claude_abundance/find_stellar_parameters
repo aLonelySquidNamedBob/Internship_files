@@ -62,10 +62,10 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 
 SELECTED_STAR = "HD196944"
 
-TEFF = 5539.0                        # K
-LOGG = 2.44                          # dex (cgs)
-VMIC = 1.20                          # km/s
-FEH = -1.95                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.50 + FEH for the departure coeffs
+TEFF = 5200.0                        # K
+LOGG = 1.70                          # dex (cgs)
+VMIC = 1.35                          # km/s
+FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.50 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
@@ -73,11 +73,12 @@ MASS = None                          # MARCS mass: None -> from `model_atmospher
 RUN_NOTE = ""                        # what is special about this run, e.g. "vmic 1.8" / "alt linelist"; goes into summary.yaml
 LINE_FILE = None                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
+    n_jobs=12,
     half_window=0.4,                 # default fit region = line centre +/- this [A]; every pixel in it is fitted.
                                      # Per line it is overridden by the chi2_left / chi2_right columns of the line CSV
     broad_profile="radtan",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
                                      # the number) or "gauss" (profile 2, the number is the FWHM)
-    fit_broadening=True,             # True: fit the extra broadening per line (0..broad_max); False: use the
+    fit_broadening=False,            # True: fit the extra broadening per line (0..broad_max); False: use the
     broadening=5.5,                  # fixed value in km/s for every line (only used when fit_broadening=False)
     broad_max=12.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s

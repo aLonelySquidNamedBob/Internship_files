@@ -180,7 +180,7 @@ class Reviewer:
         self.axr.clear()
         fit = self.run / "lines" / lid / "bestfit.csv"
         if fit.exists():
-            wl, obs, mod, used = read_bestfit(fit)
+            wl, obs, mod, used, nofe = read_bestfit(fit)
             left, right = self.windows.get(lid, (np.nan, np.nan))
             for a in (self.ax, self.axr):
                 a.axvspan(left, right, color="0.92", zorder=0)
@@ -192,6 +192,8 @@ class Reviewer:
             if (~used).any():
                 self.ax.plot(wl[~used], obs[~used], ".", color="0.7", ms=3, label="not in the fit")
             self.ax.plot(wl, mod, "r-", lw=1.2, label="best fit")
+            if np.isfinite(nofe).any():
+                self.ax.plot(wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
             self.ax.legend(fontsize=8, loc="lower left")
             self.axr.plot(wl[used], (obs - mod)[used], "k.", ms=2)
             self.axr.plot(wl[~used], (obs - mod)[~used], ".", color="0.7", ms=2)

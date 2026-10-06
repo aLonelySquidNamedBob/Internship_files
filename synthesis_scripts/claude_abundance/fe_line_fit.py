@@ -394,6 +394,11 @@ class FitSettings:
                                    # when a window has little continuum.
     assign_nlte_levels: bool = True  # NLTE: give the selected lines missing model-atom level numbers (all Fe II
                                    # lines, a few Fe I) by energy, see "NLTE level identification" below
+    no_fe_profile: bool = True     # also synthesise every line region with A(Fe) = no_fe_abundance (one extra bsyn run
+                                   # per line) and show it, with the same broadening / RV shift / continuum as the
+                                   # best fit, as the "no Fe" profile: whatever absorbs there is not iron (blends)
+    no_fe_abundance: float = -20.0   # log eps(Fe) of that profile. Note that bsyn recomputes the electron pressure
+                                   # with Fe removed, so other lines change slightly (see lines.csv: nofe_*)
     keep_synth: bool = True        # keep the synthetic spectra of every trial abundance in lines/<line>/synth/
                                    # (A<abund>_<T|F>.spec: bsyn output; .cvl: after the instrumental profile)
                                    # and the chi^2 at each of them in lines/<line>/chi2_curve.csv
@@ -655,13 +660,21 @@ class LineFitter:
         sigma = (1.0 / np.sqrt(curvature)) * np.sqrt(max(chi2_red, 1.0)) if bracketed else np.nan
         at_broad_limit = self.fixed_broad is None and (nearest["broad"] >= s.broad_max - 0.05 or
                                                        nearest["broad"] <= s.broad_min + 0.05)
+        model_nofe, nofe_status = np.full(len(self.d_full.wl), np.nan), "off"
+        if s.no_fe_profile:
+            try:
+                model_nofe, nofe_status = self.model_full(s.no_fe_abundance, nearest), "ok"
+            except Exception as exc:                          # noqa: BLE001 - the fit itself is fine
+                nofe_status = f"failed: {type(exc).__name__}: {exc}"[:120]
         return dict(A=a_best, sigma=float(sigma), chi2_red=chi2_red, dv_kms=nearest["dv"],
+                    model_nofe=model_nofe, no_fe_status=nofe_status,
                     broad_kms=nearest["broad"], broad_at_limit=bool(at_broad_limit), cont=nearest["cont"],
                     n_synth=len(self.evals), at_boundary=not bracketed,
                     model=self.model_full(a_near, nearest), used=self.region.copy())
 
 
-def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, used: np.ndarray) -> None:
+def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, used: np.ndarray,
+              nofe: np.ndarray | None = None) -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -676,7 +689,9 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
     ax.plot(data.wl[used], data.fl[used], "k.", ms=3)
     ax.plot(data.wl[~used], data.fl[~used], ".", color="0.7", ms=3, label="not in the fit")
     ax.plot(data.wl, model, "r-")
-    if (~used).any():
+    if nofe is not None and np.isfinite(nofe).any():
+        ax.plot(data.wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
+    if (~used).any() or (nofe is not None and np.isfinite(nofe).any()):
         ax.legend(fontsize=7, loc="lower left")
     ax.set_title(f"{res['line_id']}  A(Fe)={res['A']:.2f}+/-{res['sigma']:.2f}  chi2r={res['chi2_red']:.1f}  "
                  f"broad={res['broad_kms']:.1f} km/s", fontsize=9)
@@ -696,6 +711,7 @@ def fit_one_line(job: dict) -> dict:
                A=np.nan, sigma=np.nan, chi2_red=np.nan, dv_kms=np.nan, broad_kms=np.nan, broad_at_limit=False,
                cont=np.nan, npts=int(len(job["wl"])), n_synth=0, at_boundary=False,
                chi2_left=round(job["fit_lo"], 4), chi2_right=round(job["fit_hi"], 4), region_source=job["region_source"],
+               nofe_depth_centre=np.nan, nofe_depth_max=np.nan, no_fe_status="off",
                other_lines_in_window=job["neighbours"], nlte_levels=job["nlte_levels"], status="ok")
     outdir = Path(job["outdir"])
     outdir.mkdir(parents=True, exist_ok=True)
@@ -712,13 +728,16 @@ def fit_one_line(job: dict) -> dict:
         region = (data.wl >= job["fit_lo"]) & (data.wl <= job["fit_hi"])
         fitter = LineFitter(synth, data, job["nlte"], s, job["fixed_broad"], region)
         out = fitter.run(job["a_guess"], job["warm"])
-        model, used = out.pop("model"), out.pop("used")
+        model, used, nofe = out.pop("model"), out.pop("used"), out.pop("model_nofe")
         res.update(out)
-        np.savetxt(outdir / "bestfit.csv", np.column_stack([data.wl, data.fl, model, used.astype(int)]),
-                   delimiter=",", header="wavelength,flux_obs,flux_model,used_in_fit", comments="",
-                   fmt=["%.4f", "%.6f", "%.6f", "%d"])
+        if np.isfinite(nofe).any():                           # absorption of everything that is not iron
+            res["nofe_depth_centre"] = round(float(1.0 - nofe[np.abs(data.wl - w) <= 0.03].min()), 4)
+            res["nofe_depth_max"] = round(float(1.0 - nofe[used].min()), 4)
+        np.savetxt(outdir / "bestfit.csv", np.column_stack([data.wl, data.fl, model, used.astype(int), nofe]),
+                   delimiter=",", header="wavelength,flux_obs,flux_model,used_in_fit,flux_noFe", comments="",
+                   fmt=["%.4f", "%.6f", "%.6f", "%d", "%.6f"])
         if s.make_plots:
-            _plot_fit(outdir / "fit.png", res, data, model, row, used)
+            _plot_fit(outdir / "fit.png", res, data, model, row, used, nofe)
     except Exception as exc:                              # noqa: BLE001 - keep the batch going
         res["status"] = f"failed: {type(exc).__name__}: {exc}"
         # The full Turbospectrum log is ~15 MB per line (bsyn warns about every Fe line of the whole line
@@ -1097,11 +1116,13 @@ def selection_kind(selection: str) -> str:
     return selection.split(" ")[0].rstrip(":") if selection else ""
 
 
-def read_bestfit(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """wavelength, observed, model, used-in-fit mask from a bestfit.csv (older files have no mask column)."""
+def read_bestfit(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """wavelength, observed, model, used-in-fit mask, no-Fe model from a bestfit.csv (older files lack the last
+    two columns: all pixels used, no-Fe model = nan)."""
     a = np.loadtxt(path, delimiter=",", skiprows=1, ndmin=2)
     used = a[:, 3].astype(bool) if a.shape[1] > 3 else np.ones(len(a), bool)
-    return a[:, 0], a[:, 1], a[:, 2], used
+    nofe = a[:, 4] if a.shape[1] > 4 else np.full(len(a), np.nan)
+    return a[:, 0], a[:, 1], a[:, 2], used, nofe
 
 
 def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str, tuple] | None = None,
@@ -1137,7 +1158,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
         color = _SELECTION_COLORS.get(selection_kind(sel), "black")
         fit = Path(run_dir) / "lines" / lid / "bestfit.csv"
         if fit.exists():
-            wl, obs, mod, used = read_bestfit(fit)
+            wl, obs, mod, used, nofe = read_bestfit(fit)
             lo, hi = min(obs.min(), mod.min()), max(obs.max(), mod.max())
             base = lo - 0.12 * (hi - lo) - 0.02
             if lid in windows:
@@ -1151,6 +1172,8 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
             ax.plot(wl[used], obs[used], "k.", ms=1.5)
             ax.plot(wl[~used], obs[~used], ".", color="0.75", ms=1.5)
             ax.plot(wl, mod, "r-", lw=0.8)
+            if np.isfinite(nofe).any():
+                ax.plot(wl, nofe, "-", color="tab:cyan", lw=0.8)
             ax.set_xlim(wl.min(), wl.max())
             ax.set_ylim(base - 0.04 * (hi - lo) - 0.01, hi + 0.04 * (hi - lo) + 0.005)
         else:
@@ -1176,7 +1199,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
     for ax in list(axes.flat)[len(rows):]:
         ax.axis("off")
     fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, orange flagged by hand, red rejected "
-                 "by the quality cuts;  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  "
+                 "by the quality cuts;  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
                  "bottom trace: obs - fit", fontsize=10,
                  y=1 - 0.25 / (2.5 * nrows + head), va="top")
     fig.subplots_adjust(left=0.02, right=0.99, bottom=0.02, top=1 - head / (2.5 * nrows + head),
