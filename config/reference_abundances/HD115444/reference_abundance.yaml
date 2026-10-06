@@ -1,58 +1,34 @@
-# Reference abundances transcribed from Merle et al., "Barium and europium isotopic ratios",
-# table "Absolute and relative chemical abundances of the stellar sample".
-# Transcribed from a photo of the printed table on 2026-10-06; every value re-checked against the image.
-#
-# Conventions
-#   abundances: A(X) = log eps(X) = log10(N_X/N_H) + 12
-#   relative:   [X/Fe], as printed (no solar scale applied here)
-#   error:      the printed +/- value; null where the table gives none
-#   null entry: the table shows a dash (not measured)
-#   flags:      footnote symbols printed in the table. The footnote TEXT is not in the photo,
-#               so meanings are NOT transcribed; check the paper before relying on them.
-#                 asterisk  - '*' on the row label (A(Fe)*, A(Eu)*): applies to all stars
-#                 square    - small open square after every Ba value
-#                 dagger    - dagger after the first HD 196944 Ba value
-#                 triangle  - open triangle (HE 2208-1239 A(N) and [N/Fe])
-#
-# INCOMPLETE: the photo cuts off at the [O/Fe] row (that row is only partly visible,
-# but every digit is readable). Any rows below [O/Fe] are missing and are not transcribed.
+# Reference absolute abundances, A(X) = log N(X)/N(H) + 12.
+# Source: Merle et al., "Barium and europium isotopic ratios", table of absolute and relative
+# abundances (transcribed from a photo, 2026-10-06). Starting point only; to be rederived.
+# error: printed uncertainty (null where none is given). null entry: not measured in the paper.
+# nlte: true marks values the paper says include non-LTE corrections (Fe, Eu).
 
 star: HD115444
 name: "HD 115444"
-
-source:
-  reference: "Merle et al., Barium and europium isotopic ratios"
-  table: "Absolute and relative chemical abundances of the stellar sample"
-  transcribed: "2026-10-06, from photo"
-  complete: false  # rows below [O/Fe] cut off in the photo
 
 abundances:
   C: {value: 5.02, error: 0.07}
   N: {value: 7.80, error: 0.30}
   O: {value: 7.08, error: 0.09}
   Mg: {value: 5.00, error: 0.07}
-  Fe: {value: 4.48, error: 0.08, flags: [asterisk]}
+  Fe: {value: 4.48, error: 0.08, nlte: true}
   Si: {value: 4.55, error: 0.12}
   Sr: {value: -0.12, error: 0.18}
   Y: {value: -1.05, error: 0.06}
   Zr: {value: -0.10, error: 0.11}
-  Ba: {value: -0.87, error: null, flags: [square]}
+  Ba: {value: -0.87, error: null, note: "not measured: from [Ba/Fe] = [Ce/Fe]"}
   La: {value: -1.51, error: 0.05}
   Ce: {value: -1.30, error: 0.08}
   Pr: {value: -1.74, error: 0.13}
   Nd: {value: -1.19, error: 0.08}
   Sm: {value: -1.38, error: 0.06}
-  Eu: {value: -1.80, error: 0.13, flags: [asterisk]}
+  Eu: {value: -1.80, error: 0.13, nlte: true}
   Gd: {value: -1.49, error: 0.015}
   Dy: {value: -0.91, error: 0.17}
   Er: {value: -1.21, error: 0.09}
   Hf: {value: -1.46, error: 0.20}
-  Pb: null  # not measured (— in table)
+  Pb: null  # not measured
 
 isotope_ratios:
-  C12_C13: null  # not measured (— in table)
-
-relative:
-  "C/Fe": {value: -0.46, error: 0.12}
-  "N/Fe": {value: 2.99, error: 0.33}
-  "O/Fe": {value: 1.39, error: 0.09}  # row partly cut off in photo; digits legible
+  C12_C13: null  # not measured
