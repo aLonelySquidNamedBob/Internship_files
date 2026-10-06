@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""
+A(Fe) of every selected Fe I / Fe II line of one star, for ONE fixed set of stellar parameters.
+
+Run it as a plain script: edit the settings below, then `python find_stellar_parameters`.
+
+What it does (one pass, nothing is iterated, so a run is fully set by the settings below):
+  1. interpolates a MARCS atmosphere + Fe departure coefficients at (TEFF, LOGG, FEH) with
+     interp_nlte_2.py; the departure coefficients are computed for A(Fe) = 7.50 + FEH,
+  2. fits A(Fe) line by line with fe_line_fit.fit_lines (see fe_line_fit.py for the method),
+  3. writes the per-line table and a summary: mean A(Fe I), A(Fe II), their difference and the
+     slopes of A(Fe I) against excitation potential and reduced EW. These are for inspection only;
+     nothing is adjusted.
+
+Lines you do not trust are listed with a reason in data/selected_lines/<star>/fe_line_flags.yaml (next to the
+line CSV), which review_fits.py writes as you click through the fits; it can also be edited by hand. Flagged
+lines are still fitted (so their fit is there to look at) but are left out of the means and slopes, and marked
+"flagged: <reason>" in lines.csv. With ONLY_FLAGGED = True only the flagged lines are fitted, e.g. to redo them
+with other FIT_SETTINGS.
+
+Everything goes to  ~/NICO/runs/<star>/fe_abundance/T<teff>_g<logg>_v<vmic>_z<feh>_<NLTE|LTE>_<time>/ :
+    lines.csv            one row per line (A, sigma, chi2_red, RV shift, broadening (broad_kms: the FWHM argument of faltbon,
+                         see broad_profile), continuum, EP, EW, status,
+                         NLTE levels used, and `selection`: used / sigma-clipped / flagged: ... / rejected: ...)
+    summary.yaml         parameters, atmosphere files, means, slopes, which lines were used, sigma-clipped,
+                         flagged or rejected (with the reason), settings
+    nlte_levels.csv      NLTE runs: model-atom levels of every selected line (from the line list or assigned)
+    fe_line_flags.yaml   copy of the flags used
+    diagnostics.png      A(Fe) against EP, REW and wavelength
+    overview.png         all line fits in one picture, numbered and coloured by selection
+    lines/<line>/        fit.png and bestfit.csv per line; synth/ holds the synthetic spectrum of every trial
+                         abundance (.spec from bsyn, .cvl after the instrumental profile) and chi2_curve.csv the
+                         chi^2, RV shift, broadening and continuum fitted at each of them
+    atm/                 the interpolated atmosphere and departure coefficients
+
+run_point() does one parameter set, so a Teff/logg/vmic grid is a loop over it (see the end of main()).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import numpy as np
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
+from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSettings, StarConfig, analyze,
+                         fit_lines, load_lines, load_spectrum, load_star_config, parse_atm_name, plot_diagnostics,
+                         print_summary, resolve_path, totals_text, write_csv, line_flags_path, load_line_flags,
+                         save_line_flags, plot_overview)
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+SELECTED_STAR = "HD196944"
+
+TEFF = 5539.0                        # K
+LOGG = 2.44                          # dex (cgs)
+VMIC = 1.20                          # km/s
+FEH = -1.95                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.50 + FEH for the departure coeffs
+NLTE = "T"                           # "T" = NLTE, "F" = LTE
+
+MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
+                                     # 0.0 = plane-parallel)
+RUN_NOTE = ""                        # what is special about this run, e.g. "vmic 1.8" / "alt linelist"; goes into summary.yaml
+LINE_FILE = None                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
+FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
+    half_window=0.4,                 # default fit region = line centre +/- this [A]; every pixel in it is fitted.
+                                     # Per line it is overridden by the chi2_left / chi2_right columns of the line CSV
+    broad_profile="radtan",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
+                                     # the number) or "gauss" (profile 2, the number is the FWHM)
+    fit_broadening=True,             # True: fit the extra broadening per line (0..broad_max); False: use the
+    broadening=5.5,                  # fixed value in km/s for every line (only used when fit_broadening=False)
+    broad_max=12.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
+    fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
+    rv_fixed=0.0,                    # shift for every line when fit_rv=False
+    sigma_clip=True,                 # False: no sigma clipping of the Fe I lines (threshold clip_sigma = 2.5)
+    fit_continuum=False,             # True: also fit a local continuum scale per line (weak prior around 1)
+    fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
+                                     # the CSV) or "core" (+/- core_half_width, 0.04 A)
+)
+KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
+
+# Lines left out of the summary (line_id: reason) are read from this file; None -> fe_line_flags.yaml next to
+# the line CSV. review_fits.py writes it.
+LINE_FLAGS_FILE = None
+ONLY_FLAGGED = False                 # True: fit only the flagged lines (run directory gets _flagged)
+
+# The interpolator: interp_nlte_2.py is the copy of T. Merle's interp_nlte.py that reads INTERP_OPATH / INTERP_PLOT /
+# INTERP_INTERACTIVE from the environment; interpol_modeles_nlte (Fortran) sits next to it. The script expects st/s,
+# st/p and dc/ in its working directory, so every call runs in a fresh scratch directory with those three linked to
+# the grids below (this also keeps its temporary files out of the data directory).
+INTERP_DIR = HOME / "data" / "original" / "NLTE"
+INTERP_SCRIPT = INTERP_DIR / "interp_nlte_2.py"
+MARCS_SPH = HOME / "data" / "original" / "atm" / "MARCS_st_sph_t02_mod"
+MARCS_PPL = HOME / "data" / "original" / "atm" / "MARCS_st_ppl_t01_mod"
+DC_GRID = INTERP_DIR / "dc"
+LOGG_MAX_SPHERICAL = 3.5             # the spherical MARCS grid stops at logg = 3.5
+
+
+# ---------------------------------------------------------------------------
+# Atmosphere interpolation (calls interp_nlte_2.py)
+# ---------------------------------------------------------------------------
+
+def make_atmosphere(teff: float, logg: float, feoh: float, abund: float, mass: float,
+                    element: str, vmic: float, outdir: Path) -> AtmosphereSpec:
+    outdir.mkdir(parents=True, exist_ok=True)
+    for f in (INTERP_SCRIPT, INTERP_DIR / "interpol_modeles_nlte", MARCS_SPH, MARCS_PPL, DC_GRID / element):
+        if not f.exists():
+            raise SystemExit(f"{f} not found: check the interpolator paths at the top of this script")
+    env = dict(os.environ, INTERP_OPATH=str(outdir), INTERP_PLOT="0", INTERP_INTERACTIVE="0", MPLBACKEND="Agg")
+    env["PATH"] = os.pathsep.join([str(INTERP_DIR), str(TS_DIR / "interpolator"), env.get("PATH", "")])
+    cmd = [sys.executable, str(INTERP_SCRIPT), f"{mass:.1f}", str(int(round(teff))), f"{logg:.2f}",
+           f"{feoh:.2f}", element, f"{abund:.2f}"]
+    with tempfile.TemporaryDirectory(prefix="interp_") as tmp:
+        tmp = Path(tmp)
+        (tmp / "st").mkdir()
+        (tmp / "st" / "s").symlink_to(MARCS_SPH)
+        (tmp / "st" / "p").symlink_to(MARCS_PPL)
+        (tmp / "dc").symlink_to(DC_GRID)
+        proc = subprocess.run(cmd, cwd=tmp, env=env, capture_output=True, text=True)
+    ints, dcs = sorted(outdir.glob("*.int")), sorted(outdir.glob("*_dc.dat"))
+    if proc.returncode != 0 or len(ints) != 1 or len(dcs) != 1:
+        raise RuntimeError(
+            f"interpolation failed for Teff={teff:.0f} logg={logg:.2f} [Fe/H]={feoh:.2f} A({element})={abund:.2f}\n"
+            f"command: {' '.join(cmd)}\n--- stdout (tail) ---\n{proc.stdout[-1500:]}\n--- stderr (tail) ---\n{proc.stderr[-1500:]}")
+    p = parse_atm_name(ints[0].name)
+    return AtmosphereSpec(atm=ints[0], dc=dcs[0], feoh=p["feoh"], alpha_fe=p["alpha_fe"], vmic=float(vmic),
+                          teff=float(teff), logg=float(logg))
+
+
+# ---------------------------------------------------------------------------
+# One parameter set
+# ---------------------------------------------------------------------------
+
+def _plain(v):
+    """numpy scalars -> python numbers, for yaml."""
+    return v.item() if isinstance(v, np.generic) else v
+
+
+def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: float, vmic: float, feh: float,
+              nlte: str, mass: float, outdir: Path, settings: FitSettings,
+              flags: dict[str, str] | None = None, note: str = "") -> tuple[list[dict], dict]:
+    """Interpolate the atmosphere, fit every line, write lines.csv / summary.yaml / diagnostics.png to outdir.
+    `flags` (line_id -> reason) are left out of the summary."""
+    flags = flags or {}
+    if mass > 0 and logg > LOGG_MAX_SPHERICAL:
+        raise SystemExit(f"logg = {logg} is beyond the spherical MARCS grid (max {LOGG_MAX_SPHERICAL}); "
+                         f"use MASS = 0.0 for plane-parallel models")
+    outdir.mkdir(parents=True, exist_ok=True)
+    abund = round(SOLAR_FE + feh, 2)
+    atm = make_atmosphere(teff, logg, feh, abund, mass, cfg.element, vmic, outdir / "atm")
+
+    t0 = time.time()
+    rows = fit_lines(lines, atm, cfg, spectrum, outdir, settings=settings, nlte=nlte)
+    info = analyze(rows, settings, flags)
+    for r, sel in zip(rows, info["selection"]):
+        r["selection"] = sel
+    write_csv(outdir / "lines.csv", rows)
+    mode = "NLTE" if nlte == "T" else "LTE"
+    plot_diagnostics(rows, info, outdir / "diagnostics.png",
+                     f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}")
+    plot_overview(rows, outdir, outdir / "overview.png",
+                  windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in lines},
+                  title=f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}",
+                  totals=totals_text(info))
+    if not KEEP_LINE_FILES:
+        shutil.rmtree(outdir / "lines", ignore_errors=True)
+
+    summary = dict(
+        star=cfg.star, note=note, teff=teff, logg=logg, vmic=vmic, feh_atmosphere=feh, nlte=(nlte == "T"), mass=mass,
+        atmosphere=atm.atm.name, departure_coefficients=atm.dc.name, A_Fe_departure_coefficients=abund,
+        manual_fit_regions={r["line_id"]: [r["chi2_left"], r["chi2_right"]] for r in rows
+                            if r["region_source"] == "manual"},
+        abu_c=cfg.abu_c, solar_abundance_scale="asp2007 (Turbospectrum default)",
+        spectrum=str(cfg.spectrum_file), snr=cfg.snr, line_file=str(cfg.line_file),
+        results={k: _plain(v) for k, v in info.items()
+                 if k not in ("used_ids", "clipped_ids", "flagged_ids", "selection")},
+        used_lines=info["used_ids"],
+        sigma_clipped_lines={r["line_id"]: r["selection"] for r in rows if r["selection"].startswith("sigma")},
+        flagged_lines={r["line_id"]: r["selection"][len("flagged: "):] for r in rows
+                       if r["selection"].startswith("flagged")},
+        rejected_lines={r["line_id"]: r["selection"][len("rejected: "):] for r in rows
+                        if r["selection"].startswith("rejected")},
+        fit_settings=dataclasses.asdict(settings),
+        runtime_s=round(time.time() - t0),
+    )
+    (outdir / "summary.yaml").write_text(yaml.dump(summary, sort_keys=False))
+    return rows, info
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    cfg = load_star_config(SELECTED_STAR)
+    if cfg.spectrum_file is None:
+        raise SystemExit(f"{SELECTED_STAR}: no normalized spectrum listed in stars.yaml")
+    if LINE_FILE:
+        cfg.line_file = resolve_path(LINE_FILE)
+    if (cfg.raw.get("spectra") or {}).get("snr") is None:
+        print(f"note: no `spectra: snr:` for {SELECTED_STAR} in stars.yaml, using SNR = {cfg.snr:g}")
+    mass = MASS if MASS is not None else (parse_atm_name(cfg.yaml_atm.name).get("mass", 1.0) if cfg.yaml_atm else 1.0)
+
+    lines = load_lines(cfg.line_file)
+    manual = [r["line_id"] for r in lines if r["chi2_left"] is not None]
+    print(f"{len(manual)} line(s) with a manual fit region (chi2_left / chi2_right in {cfg.line_file.name})"
+          + (f": {', '.join(manual)}" if manual else ""))
+    flags_file = resolve_path(LINE_FLAGS_FILE) if LINE_FLAGS_FILE else line_flags_path(cfg)
+    flags = load_line_flags(flags_file)
+    unknown = set(flags) - {r["line_id"] for r in lines}
+    if unknown:
+        raise SystemExit(f"{flags_file} names lines that are not in {cfg.line_file}: {sorted(unknown)}")
+    print(f"{len(flags)} flagged line(s) from {flags_file}")
+    if ONLY_FLAGGED:
+        if not flags:
+            raise SystemExit(f"ONLY_FLAGGED is set but {flags_file} flags no lines")
+        lines = [r for r in lines if r["line_id"] in flags]
+    spectrum = load_spectrum(cfg.spectrum_file, cfg.rv)
+    n1 = sum(1 for r in lines if r["ion"] == 1)
+    mode = "NLTE" if NLTE == "T" else "LTE"
+
+    outdir = (RUNS_DIR / SELECTED_STAR / "fe_abundance" /
+              f"T{TEFF:.0f}_g{LOGG:.2f}_v{VMIC:.2f}_z{FEH:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}"
+              f"_{time.strftime('%Y%m%d_%H%M%S')}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "config.yaml").write_text(yaml.dump(cfg.raw))
+    for f in (Path(__file__), Path(__file__).with_name("fe_line_fit.py")):
+        shutil.copy2(f, outdir / f.name)
+    save_line_flags(outdir / "fe_line_flags.yaml", flags)
+
+    print(f"{SELECTED_STAR}: {len(lines)} lines ({n1} Fe I, {len(lines) - n1} Fe II), {mode}, "
+          f"Teff={TEFF:.0f} logg={LOGG:.2f} vmic={VMIC:.2f} [Fe/H]={FEH:+.2f}\n-> {outdir}")
+    rows, info = run_point(cfg, lines, spectrum, TEFF, LOGG, VMIC, FEH, NLTE, mass, outdir, FIT_SETTINGS, flags,
+                         note=RUN_NOTE)
+    if ONLY_FLAGGED:                                # all lines are flagged: there is no summary, only the lines
+        for r in rows:
+            print(f"  {r['line_id']:15s} A = {r['A']:.3f} +/- {r['sigma']:.3f}  chi2_red {r['chi2_red']:.2f}  "
+                  f"broadening {r['broad_kms']:.1f} km/s  continuum {r['cont']:.3f}  [{r['status']}]")
+    else:
+        print_summary(info)
+    print(f"Results in {outdir}")
+
+    # A grid later: loop over run_point with one sub-directory per point, e.g.
+    #   for teff, logg, vmic in itertools.product(TEFFS, LOGGS, VMICS):
+    #       run_point(cfg, lines, spectrum, teff, logg, vmic, FEH, NLTE, mass,
+    #                 outdir / f"T{teff:.0f}_g{logg:.2f}_v{vmic:.2f}", FIT_SETTINGS, flags)
+    # and collect the summary.yaml files into one table.
+
+
+if __name__ == "__main__":
+    main()
