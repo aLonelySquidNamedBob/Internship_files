@@ -50,7 +50,7 @@ import tempfile
 import time
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -80,6 +80,12 @@ DEFAULT_VMIC = 1.0
 C_KMS = 299792.458
 FALTBON_PROFILE = {"gauss": 2, "radtan": 3}   # faltbon profile types of the extra broadening
 MIN_BROAD_KMS = 0.1      # below this the extra broadening is skipped (kernel narrower than a pixel)
+REFERENCE_ABUNDANCE_FILE = CONFIG_DIR / "reference_abundance.yaml"   # published A(X) per star (keys as stars.yaml)
+
+ELEMENTS = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr "
+            "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb "
+            "Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U").split()
+ATOMIC_NUMBER = {el: z for z, el in enumerate(ELEMENTS, 1)}
 
 
 def resolve_path(p) -> Path:
@@ -126,11 +132,68 @@ class StarConfig:
     abu_c: float | None            # absolute A(C) = log eps(C), H = 12; None: scaled solar
     vmic: float
     nlte_abundance: float | None
+    # abundances of the other elements, see individual_abundances()
+    reference_abundances: dict = field(default_factory=dict)  # element -> A(X) from reference_abundance.yaml
+    reference_notes: dict = field(default_factory=dict)       # element -> `note` of that entry
+    reference_scaling: str = "absolute"                       # "absolute" or "fe"
+    abundance_overrides: dict = field(default_factory=dict)   # element -> A(X), or None = scaled solar
 
 
 def _load_yaml(path: Path) -> dict:
     with path.open() as f:
         return yaml.safe_load(f)
+
+
+def load_reference_abundances(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) -> tuple[dict, dict]:
+    """(element -> A(X), element -> note) of one star from the reference-abundance file. Entries that are null,
+    or have a null value, are not measured and left out; a missing file or star gives empty dicts."""
+    path = Path(path)
+    if not path.exists():
+        return {}, {}
+    entry = (_load_yaml(path) or {}).get(star) or {}
+    values, notes = {}, {}
+    for el, v in (entry.get("abundances") or {}).items():
+        if el not in ATOMIC_NUMBER:
+            raise ValueError(f"{path}: unknown element {el!r} for {star}")
+        if v is None or v.get("value") is None:
+            continue
+        values[el] = float(v["value"])
+        if v.get("note"):
+            notes[el] = str(v["note"])
+    return values, notes
+
+
+def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
+    """A(X) (log eps, H = 12) given to Turbospectrum for the elements other than the fitted one, ordered by Z.
+    Elements not listed stay at the scaled-solar value of the model (METALLICITY = feoh, ALPHA/Fe on top).
+    Lowest to highest priority:
+      1. cfg.reference_abundances (reference_abundance.yaml), with cfg.reference_scaling
+           "absolute": A(X) as published,
+           "fe":       A(X) shifted by feoh - [Fe/H]_reference, i.e. the published [X/Fe] is kept;
+         Fe itself is never taken from there: it follows the model metallicity,
+      2. abu_c from stars.yaml (C),
+      3. cfg.abundance_overrides: a value, or None to put the element back to scaled solar.
+    The fitted element (cfg.element) is always left out: LineSynth adds its trial value."""
+    ref = dict(cfg.reference_abundances)
+    if cfg.reference_scaling == "fe" and ref:
+        if "Fe" not in ref:
+            raise ValueError(f"{cfg.star}: reference_scaling 'fe' needs a reference A(Fe)")
+        shift = feoh - (ref["Fe"] - SOLAR_FE)
+        ref = {el: a + shift for el, a in ref.items()}
+    elif cfg.reference_scaling not in ("absolute", "fe"):
+        raise ValueError(f"reference_scaling must be 'absolute' or 'fe', not {cfg.reference_scaling!r}")
+    ref.pop("Fe", None)
+    if cfg.abu_c is not None:
+        ref["C"] = cfg.abu_c
+    for el, a in cfg.abundance_overrides.items():
+        if el not in ATOMIC_NUMBER:
+            raise ValueError(f"abundance override for unknown element {el!r}")
+        if a is None:
+            ref.pop(el, None)
+        else:
+            ref[el] = float(a)
+    ref.pop(cfg.element, None)
+    return dict(sorted(ref.items(), key=lambda kv: ATOMIC_NUMBER[kv[0]]))
 
 
 def load_star_config(star: str) -> StarConfig:
@@ -156,6 +219,7 @@ def load_star_config(star: str) -> StarConfig:
     dc = syn.get("departure_coefficients")
     atm = syn.get("model_atmosphere")
     parsed = parse_atm_name(Path(atm).name) if atm else {}
+    ref_values, ref_notes = load_reference_abundances(star)
 
     return StarConfig(
         star=star,
@@ -178,6 +242,8 @@ def load_star_config(star: str) -> StarConfig:
         abu_c=float(syn["abu_c"]) if syn.get("abu_c") is not None else None,    # None: scaled solar
         vmic=float(syn.get("vmic") or DEFAULT_VMIC),
         nlte_abundance=float(syn["NLTE_abundance"]) if syn.get("NLTE_abundance") is not None else None,
+        reference_abundances=ref_values,
+        reference_notes=ref_notes,
     )
 
 
@@ -214,6 +280,7 @@ class LineSynth:
         self.wmin, self.wmax = round(wmin, 3), round(wmax, 3)
         self.workdir, self.log = workdir, log
         self.n_runs = 0
+        self.abundances = individual_abundances(cfg, atm.feoh)
         self._cache: dict = {}
         self._bcache: dict = {}
 
@@ -232,11 +299,13 @@ class LineSynth:
         run_program(BABSMA, self._babsma_input(), log, workdir)
 
     def _individual_abundances(self, fe: float | None = None) -> str:
-        """The 'INDIVIDUAL ABUNDANCES' block (absolute log eps, H = 12) shared by babsma and bsyn: Fe (the trial
-        value, bsyn only) and C (stars.yaml abu_c, both, so that the continuous opacity and molecular equilibrium
-        of babsma agree with the line synthesis). Entries that are not set are left at the scaled-solar value."""
-        c = self.cfg
-        pairs = ([(c.Z, fe)] if fe is not None else []) + ([(6, c.abu_c)] if c.abu_c is not None else [])
+        """The 'INDIVIDUAL ABUNDANCES' block (absolute log eps, H = 12) shared by babsma and bsyn: the fitted
+        element (the trial value, bsyn only) and every element of individual_abundances() (reference file,
+        abu_c, overrides; both, so that the continuous opacity and molecular equilibrium of babsma agree with the
+        line synthesis). Elements that are not listed are left at the scaled-solar value."""
+        pairs = [(ATOMIC_NUMBER[el], a) for el, a in self.abundances.items()]
+        if fe is not None:
+            pairs = sorted(pairs + [(self.cfg.Z, fe)])
         if not pairs:
             return ""
         return f"'INDIVIDUAL ABUNDANCES:'   '{len(pairs)}'\n" + "".join(f"{z}  {v:.4f}\n" for z, v in pairs)

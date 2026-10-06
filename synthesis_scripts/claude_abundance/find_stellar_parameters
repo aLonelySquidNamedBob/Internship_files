@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.
 from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSettings, StarConfig, analyze,
                          fit_lines, load_lines, load_spectrum, load_star_config, parse_atm_name, plot_diagnostics,
                          print_summary, resolve_path, totals_text, write_csv, line_flags_path, load_line_flags,
-                         save_line_flags, plot_overview)
+                         save_line_flags, plot_overview, individual_abundances)
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -90,6 +90,17 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
     a_tol=0.001,
 )
+# Abundances of the other elements (blends, molecules, electron donors), given to babsma and bsyn as INDIVIDUAL
+# ABUNDANCES. Anything not set below or in the reference file stays scaled solar for FEH (with the atmosphere's
+# [alpha/Fe]); Fe follows FEH; the fitted element (Fe) always gets its trial value, whatever is set here.
+USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
+REFERENCE_SCALING = "absolute"       # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
+                                     # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.50)
+ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
+                                     # reference file and abu_c in stars.yaml.
+    # "Ba": 1.19,                    # e.g. HD196944: the [Ba/Fe] = [Ce/Fe] value instead of the 3D NLTE 1.15
+    # "N": None,
+}
 KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
 
 # Lines left out of the summary (line_id: reason) are read from this file; None -> fe_line_flags.yaml next to
@@ -184,6 +195,9 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
         manual_fit_regions={r["line_id"]: [r["chi2_left"], r["chi2_right"]] for r in rows
                             if r["region_source"] == "manual"},
         abu_c=cfg.abu_c, solar_abundance_scale="asp2007 (Turbospectrum default)",
+        reference_scaling=cfg.reference_scaling if cfg.reference_abundances else None,
+        abundance_overrides=dict(cfg.abundance_overrides),
+        individual_abundances=individual_abundances(cfg, atm.feoh),     # everything but the fitted element
         spectrum=str(cfg.spectrum_file), snr=cfg.snr, line_file=str(cfg.line_file),
         results={k: _plain(v) for k, v in info.items()
                  if k not in ("used_ids", "clipped_ids", "flagged_ids", "selection")},
@@ -212,6 +226,16 @@ def main() -> None:
         cfg.line_file = resolve_path(LINE_FILE)
     if (cfg.raw.get("spectra") or {}).get("snr") is None:
         print(f"note: no `spectra: snr:` for {SELECTED_STAR} in stars.yaml, using SNR = {cfg.snr:g}")
+    if not USE_REFERENCE_ABUNDANCES:
+        cfg.reference_abundances, cfg.reference_notes = {}, {}
+    cfg.reference_scaling = REFERENCE_SCALING
+    cfg.abundance_overrides = dict(ABUNDANCE_OVERRIDES)
+    if cfg.element in ABUNDANCE_OVERRIDES:
+        print(f"note: ABUNDANCE_OVERRIDES[{cfg.element!r}] is ignored: {cfg.element} is the fitted element")
+    print(f"individual abundances (everything else scaled solar for [Fe/H] = {FEH:+.2f}, {cfg.element} fitted):")
+    for el, a in individual_abundances(cfg, FEH).items():
+        src = "override" if el in ABUNDANCE_OVERRIDES else cfg.reference_notes.get(el, "")
+        print(f"  {el:2s} {a:6.2f}" + (f"  ({src})" if src else ""))
     mass = MASS if MASS is not None else (parse_atm_name(cfg.yaml_atm.name).get("mass", 1.0) if cfg.yaml_atm else 1.0)
 
     lines = load_lines(cfg.line_file)
