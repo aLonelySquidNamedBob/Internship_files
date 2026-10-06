@@ -1,0 +1,152 @@
+# Reference absolute abundances, A(X) = log N(X)/N(H) + 12.
+# Source: Merle et al., "Barium and europium isotopic ratios", table of absolute and relative
+# abundances (transcribed from a photo, 2026-10-06). Starting point only; to be rederived.
+# error: printed uncertainty (null where none is given). null entry: not measured in the paper.
+# nlte: true marks values the paper says include non-LTE corrections (Fe, Eu).
+# Top-level keys match config/stars.yaml.
+
+HD2454:
+  name: "HD 2454"
+
+  abundances:
+    C: {value: 8.21, error: 0.05}
+    N: null  # not measured
+    O: {value: 8.85, error: 0.09}
+    Mg: {value: 7.28, error: 0.05}
+    Fe: {value: 7.24, error: 0.05, nlte: true}
+    Si: {value: 7.26, error: 0.07}
+    Sr: {value: 3.10, error: 0.05}
+    Y: {value: 2.50, error: 0.06}
+    Zr: {value: 2.91, error: 0.05}
+    Ba: {value: 2.32, error: null, note: "not measured: from [Ba/Fe] = [Ce/Fe]"}
+    La: {value: 1.44, error: 0.05}
+    Ce: {value: 1.85, error: 0.06}
+    Pr: {value: 0.80, error: 0.05}
+    Nd: {value: 1.61, error: 0.06}
+    Sm: {value: 0.92, error: 0.09}
+    Eu: {value: 0.42, error: 0.05, nlte: true}
+    Gd: {value: 1.61, error: 0.08}
+    Dy: {value: 1.03, error: 0.15}
+    Er: null  # not measured
+    Hf: null  # not measured
+    Pb: null  # not measured
+
+  isotope_ratios:
+    C12_C13: 49
+
+HD196944:
+  name: "HD 196944"
+
+  abundances:
+    C: {value: 7.46, error: 0.12}
+    N: {value: 7.99, error: 0.30}
+    O: {value: 7.43, error: 0.09}
+    Mg: {value: 5.73, error: 0.07}
+    Fe: {value: 5.50, error: 0.07, nlte: true}
+    Si: {value: 5.78, error: 0.16}
+    Sr: {value: 1.21, error: 0.13}
+    Y: {value: 0.85, error: 0.08}
+    Zr: {value: 1.33, error: 0.09}
+    Ba: {value: 1.15, error: null, note: "3D non-LTE line modelling"}
+    # paper also gives 1.19 from [Ba/Fe] = [Ce/Fe]
+    La: {value: 0.16, error: 0.05}
+    Ce: {value: 0.74, error: 0.07}
+    Pr: {value: -0.38, error: 0.08}
+    Nd: {value: 0.47, error: 0.08}
+    Sm: {value: -0.17, error: 0.07}
+    Eu: {value: -1.19, error: 0.09, nlte: true}
+    Gd: {value: -0.14, error: 0.18}
+    Dy: {value: -0.24, error: 0.14}
+    Er: {value: -0.24, error: 0.08}
+    Hf: {value: 0.13, error: 0.12}
+    Pb: {value: 2.05, error: 0.08}
+
+  isotope_ratios:
+    C12_C13: 4.5
+
+HD115444:
+  name: "HD 115444"
+
+  abundances:
+    C: {value: 5.02, error: 0.07}
+    N: {value: 7.80, error: 0.30}
+    O: {value: 7.08, error: 0.09}
+    Mg: {value: 5.00, error: 0.07}
+    Fe: {value: 4.48, error: 0.08, nlte: true}
+    Si: {value: 4.55, error: 0.12}
+    Sr: {value: -0.12, error: 0.18}
+    Y: {value: -1.05, error: 0.06}
+    Zr: {value: -0.10, error: 0.11}
+    Ba: {value: -0.87, error: null, note: "not measured: from [Ba/Fe] = [Ce/Fe]"}
+    La: {value: -1.51, error: 0.05}
+    Ce: {value: -1.30, error: 0.08}
+    Pr: {value: -1.74, error: 0.13}
+    Nd: {value: -1.19, error: 0.08}
+    Sm: {value: -1.38, error: 0.06}
+    Eu: {value: -1.80, error: 0.13, nlte: true}
+    Gd: {value: -1.49, error: 0.015}
+    Dy: {value: -0.91, error: 0.17}
+    Er: {value: -1.21, error: 0.09}
+    Hf: {value: -1.46, error: 0.20}
+    Pb: null  # not measured
+
+  isotope_ratios:
+    C12_C13: null  # not measured
+
+HE22081239:
+  name: "HE 2208-1239"
+
+  abundances:
+    C: {value: 7.31, error: 0.08}
+    N: {value: 7.50, error: null, note: "not measured: fixed from nucleosynthetic predictions"}
+    O: {value: 7.30, error: 0.22}
+    Mg: {value: 5.44, error: 0.07}
+    Fe: {value: 5.05, error: 0.09, nlte: true}
+    Si: null  # not measured
+    Sr: null  # not measured
+    Y: {value: -0.20, error: 0.09}
+    Zr: {value: 0.99, error: 0.09}
+    Ba: {value: 1.20, error: null, note: "not measured: from [Ba/Fe] = [Ce/Fe]"}
+    La: {value: 0.38, error: 0.09}
+    Ce: {value: 0.73, error: 0.08}
+    Pr: {value: -0.28, error: 0.06}
+    Nd: {value: 0.68, error: 0.08}
+    Sm: {value: -0.05, error: 0.08}
+    Eu: {value: -0.72, error: 0.11, nlte: true}
+    Gd: {value: 0.05, error: 0.15}
+    Dy: {value: -0.69, error: 0.15}
+    Er: null  # not measured
+    Hf: {value: 0.29, error: 0.22}
+    Pb: null  # not measured
+
+  isotope_ratios:
+    C12_C13: 4.9
+
+TIC396792499:
+  name: "TIC 396792499"
+
+  abundances:
+    C: {value: 7.30, error: 0.09}
+    N: {value: 6.51, error: 0.30}
+    O: {value: 7.21, error: 0.13}
+    Mg: {value: 5.73, error: 0.07}
+    Fe: {value: 5.40, error: 0.10, nlte: true}
+    Si: {value: 5.51, error: 0.15}
+    Sr: {value: 0.73, error: 0.13}
+    Y: {value: 0.37, error: 0.14}
+    Zr: {value: 1.12, error: 0.14}
+    Ba: {value: 0.70, error: null, note: "not measured: from [Ba/Fe] = [Ce/Fe]"}
+    La: {value: -0.34, error: 0.08}
+    Ce: {value: 0.23, error: 0.08}
+    Pr: {value: -0.84, error: 0.06}
+    Nd: {value: -0.08, error: 0.08}
+    Sm: {value: -0.52, error: 0.09}
+    Eu: {value: -1.27, error: 0.13, nlte: true}
+    Gd: {value: -0.34, error: 0.32}
+    Dy: {value: -0.58, error: 0.16}
+    Er: null  # not measured
+    Hf: {value: -0.35, error: 0.22}
+    Pb: null  # not measured
+
+  isotope_ratios:
+    C12_C13: 16
