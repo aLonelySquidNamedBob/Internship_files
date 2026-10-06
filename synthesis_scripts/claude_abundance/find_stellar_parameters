@@ -87,6 +87,8 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     fit_continuum=False,             # True: also fit a local continuum scale per line (weak prior around 1)
     fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
+    a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
+    a_tol=0.001,
 )
 KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
 

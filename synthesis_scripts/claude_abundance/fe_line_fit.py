@@ -356,13 +356,13 @@ class FitSettings:
     n_jobs: int = 8                # parallel lines (you have 8 physical cores)
     half_window: float = 0.4       # default fit region = line centre +/- this [A] (per line overridden by the
                                    # chi2_left / chi2_right columns of the line CSV)
-    synth_pad: float = 0.5         # synthesis range extends this far [A] beyond the fit window (RV shift and
+    synth_pad: float = 1.0         # synthesis range extends this far [A] beyond the fit window (RV shift and
                                    # broadening kernel need margin)
     a_step_first: float = 0.30     # initial A(Fe) bracket half-width, no previous result [dex]
     a_step_warm: float = 0.15      # ... when warm-started from a previous result
-    a_tol: float = 0.01            # stop when the parabola minimum moves less than this [dex]
+    a_tol: float = 0.004           # stop when the parabola minimum moves less than this [dex]
     a_half_range: float = 1.5      # A(Fe) is confined to a_guess +/- this
-    max_synth: int = 14            # hard cap on bsyn runs per line
+    max_synth: int = 20            # hard cap on bsyn runs per line
     fit_rv: bool = True            # True: fit a small RV shift per line (absorbs line-list wavelength errors)
     rv_max: float = 3.0            # km/s, search limit when fitted
     rv_fixed: float = 0.0          # km/s, the shift applied to every line when fit_rv is False (on top of the
