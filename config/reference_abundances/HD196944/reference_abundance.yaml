@@ -1,0 +1,65 @@
+# Reference abundances transcribed from Merle et al., "Barium and europium isotopic ratios",
+# table "Absolute and relative chemical abundances of the stellar sample".
+# Transcribed from a photo of the printed table on 2026-10-06; every value re-checked against the image.
+#
+# Conventions
+#   abundances: A(X) = log eps(X) = log10(N_X/N_H) + 12
+#   relative:   [X/Fe], as printed (no solar scale applied here)
+#   error:      the printed +/- value; null where the table gives none
+#   null entry: the table shows a dash (not measured)
+#   flags:      footnote symbols printed in the table. The footnote TEXT is not in the photo,
+#               so meanings are NOT transcribed; check the paper before relying on them.
+#                 asterisk  - '*' on the row label (A(Fe)*, A(Eu)*): applies to all stars
+#                 square    - small open square after every Ba value
+#                 dagger    - dagger after the first HD 196944 Ba value
+#                 triangle  - open triangle (HE 2208-1239 A(N) and [N/Fe])
+#
+# INCOMPLETE: the photo cuts off at the [O/Fe] row (that row is only partly visible,
+# but every digit is readable). Any rows below [O/Fe] are missing and are not transcribed.
+
+star: HD196944
+name: "HD 196944"
+
+source:
+  reference: "Merle et al., Barium and europium isotopic ratios"
+  table: "Absolute and relative chemical abundances of the stellar sample"
+  transcribed: "2026-10-06, from photo"
+  complete: false  # rows below [O/Fe] cut off in the photo
+
+abundances:
+  C: {value: 7.46, error: 0.12}
+  N: {value: 7.99, error: 0.30}
+  O: {value: 7.43, error: 0.09}
+  Mg: {value: 5.73, error: 0.07}
+  Fe: {value: 5.50, error: 0.07, flags: [asterisk]}
+  Si: {value: 5.78, error: 0.16}
+  Sr: {value: 1.21, error: 0.13}
+  Y: {value: 0.85, error: 0.08}
+  Zr: {value: 1.33, error: 0.09}
+  Ba:
+    # printed as '1.15(dagger) / 1.19(square)': two values, no uncertainty.
+    # value left null on purpose; pick one once the footnotes are checked.
+    value: null
+    error: null
+    alternatives:
+      - {value: 1.15, flags: [dagger]}
+      - {value: 1.19, flags: [square]}
+  La: {value: 0.16, error: 0.05}
+  Ce: {value: 0.74, error: 0.07}
+  Pr: {value: -0.38, error: 0.08}
+  Nd: {value: 0.47, error: 0.08}
+  Sm: {value: -0.17, error: 0.07}
+  Eu: {value: -1.19, error: 0.09, flags: [asterisk]}
+  Gd: {value: -0.14, error: 0.18}
+  Dy: {value: -0.24, error: 0.14}
+  Er: {value: -0.24, error: 0.08}
+  Hf: {value: 0.13, error: 0.12}
+  Pb: {value: 2.05, error: 0.08}
+
+isotope_ratios:
+  C12_C13: {value: 4.5, error: null}
+
+relative:
+  "C/Fe": {value: 1.02, error: 0.14}
+  "N/Fe": {value: 2.16, error: 0.30}
+  "O/Fe": {value: 0.72, error: 0.11}  # row partly cut off in photo; digits legible
