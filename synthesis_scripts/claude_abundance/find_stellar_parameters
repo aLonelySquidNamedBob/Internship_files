@@ -94,7 +94,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
 # ABUNDANCES. Anything not set below or in the reference file stays scaled solar for FEH (with the atmosphere's
 # [alpha/Fe]); Fe follows FEH; the fitted element (Fe) always gets its trial value, whatever is set here.
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
-REFERENCE_SCALING = "absolute"       # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
+REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
                                      # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.50)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
                                      # reference file and abu_c in stars.yaml.
