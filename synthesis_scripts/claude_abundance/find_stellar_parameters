@@ -12,11 +12,12 @@ What it does (one pass, nothing is iterated, so a run is fully set by the settin
      slopes of A(Fe I) against excitation potential and reduced EW. These are for inspection only;
      nothing is adjusted.
 
-Lines you do not trust are listed with a reason in data/selected_lines/<star>/fe_line_flags.yaml (next to the
-line CSV), which review_fits.py writes as you click through the fits; it can also be edited by hand. Flagged
-lines are still fitted (so their fit is there to look at) but are left out of the means and slopes, and marked
-"flagged: <reason>" in lines.csv. With ONLY_FLAGGED = True only the flagged lines are fitted, e.g. to redo them
-with other FIT_SETTINGS.
+Notes on lines go into data/selected_lines/<star>/fe_line_flags.yaml (next to the line CSV) as line_id: reason;
+review_fits.py writes it, it can also be edited by hand. A flagged line is treated like every other line (quality
+cuts, sigma clipping, means, slopes) and only marked: orange square in diagnostics.png, orange note in
+overview.png, `flag` column in lines.csv. A reason that starts with "reject" (e.g. 'reject: bad atomic data')
+leaves the line out of the means and slopes ("rejected: by hand (...)" in lines.csv). With ONLY_FLAGGED = True
+only the lines in that file are fitted, e.g. to redo them with other FIT_SETTINGS.
 
 Everything goes to  ~/NICO/runs/<star>/fe_abundance/T<teff>_g<logg>_v<vmic>_z<feh>_<NLTE|LTE>_<time>/ :
     lines.csv            one row per line (A, sigma, chi2_red, RV shift, broadening (broad_kms: the FWHM argument of faltbon,
@@ -54,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.
 from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSettings, StarConfig, analyze,
                          fit_lines, load_lines, load_spectrum, load_star_config, parse_atm_name, plot_diagnostics,
                          print_summary, resolve_path, totals_text, write_csv, line_flags_path, load_line_flags,
-                         save_line_flags, plot_overview, individual_abundances)
+                         save_line_flags, plot_overview, individual_abundances, is_reject)
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -84,7 +85,10 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
     rv_fixed=0.0,                    # shift for every line when fit_rv=False
     sigma_clip=True,                 # False: no sigma clipping of the Fe I lines (threshold clip_sigma = 2.5)
-    fit_continuum=False,             # True: also fit a local continuum scale per line (weak prior around 1)
+    max_misfit=0.07,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
+                                     # fraction of the line depth; `misfit` in lines.csv) is larger; None = no cut
+    chi2_factor=None,                # optional old cut chi2_red > max(chi2_factor x median, 1); it punishes deep lines
+    fit_continuum=True,             # True: also fit a local continuum scale per line (weak prior around 1)
     fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
@@ -103,8 +107,8 @@ ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None 
 }
 KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
 
-# Lines left out of the summary (line_id: reason) are read from this file; None -> fe_line_flags.yaml next to
-# the line CSV. review_fits.py writes it.
+# Line flags (line_id: reason; reason "reject..." = left out, anything else = marked only) are read from this
+# file; None -> fe_line_flags.yaml next to the line CSV. review_fits.py writes it.
 LINE_FLAGS_FILE = None
 ONLY_FLAGGED = False                 # True: fit only the flagged lines (run directory gets _flagged)
 
@@ -164,7 +168,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
               nlte: str, mass: float, outdir: Path, settings: FitSettings,
               flags: dict[str, str] | None = None, note: str = "") -> tuple[list[dict], dict]:
     """Interpolate the atmosphere, fit every line, write lines.csv / summary.yaml / diagnostics.png to outdir.
-    `flags` (line_id -> reason) are left out of the summary."""
+    `flags` (line_id -> reason): reasons starting with "reject" are left out of the summary, others are notes."""
     flags = flags or {}
     if mass > 0 and logg > LOGG_MAX_SPHERICAL:
         raise SystemExit(f"logg = {logg} is beyond the spherical MARCS grid (max {LOGG_MAX_SPHERICAL}); "
@@ -176,8 +180,8 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
     t0 = time.time()
     rows = fit_lines(lines, atm, cfg, spectrum, outdir, settings=settings, nlte=nlte)
     info = analyze(rows, settings, flags)
-    for r, sel in zip(rows, info["selection"]):
-        r["selection"] = sel
+    for r, sel, flag in zip(rows, info["selection"], info["flag"]):
+        r["selection"], r["flag"] = sel, flag
     write_csv(outdir / "lines.csv", rows)
     mode = "NLTE" if nlte == "T" else "LTE"
     plot_diagnostics(rows, info, outdir / "diagnostics.png",
@@ -200,11 +204,13 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
         individual_abundances=individual_abundances(cfg, atm.feoh),     # everything but the fitted element
         spectrum=str(cfg.spectrum_file), snr=cfg.snr, line_file=str(cfg.line_file),
         results={k: _plain(v) for k, v in info.items()
-                 if k not in ("used_ids", "clipped_ids", "flagged_ids", "selection")},
+                 if k not in ("used_ids", "clipped_ids", "flagged_ids", "rejected_by_hand_ids", "max_synth_ids",
+                              "selection", "flag")},
         used_lines=info["used_ids"],
         sigma_clipped_lines={r["line_id"]: r["selection"] for r in rows if r["selection"].startswith("sigma")},
-        flagged_lines={r["line_id"]: r["selection"][len("flagged: "):] for r in rows
-                       if r["selection"].startswith("flagged")},
+        flagged_lines={r["line_id"]: f"{r['flag']}  [{r['selection']}]" for r in rows
+                       if r["flag"] and r["line_id"] in info["flagged_ids"]},
+        max_synth_reached=info["max_synth_ids"],
         rejected_lines={r["line_id"]: r["selection"][len("rejected: "):] for r in rows
                         if r["selection"].startswith("rejected")},
         fit_settings=dataclasses.asdict(settings),
@@ -247,7 +253,8 @@ def main() -> None:
     unknown = set(flags) - {r["line_id"] for r in lines}
     if unknown:
         raise SystemExit(f"{flags_file} names lines that are not in {cfg.line_file}: {sorted(unknown)}")
-    print(f"{len(flags)} flagged line(s) from {flags_file}")
+    n_rej = sum(is_reject(v) for v in flags.values())
+    print(f"{len(flags) - n_rej} flagged line(s) (marked, still used) and {n_rej} rejected by hand, from {flags_file}")
     if ONLY_FLAGGED:
         if not flags:
             raise SystemExit(f"ONLY_FLAGGED is set but {flags_file} flags no lines")
@@ -269,7 +276,7 @@ def main() -> None:
           f"Teff={TEFF:.0f} logg={LOGG:.2f} vmic={VMIC:.2f} [Fe/H]={FEH:+.2f}\n-> {outdir}")
     rows, info = run_point(cfg, lines, spectrum, TEFF, LOGG, VMIC, FEH, NLTE, mass, outdir, FIT_SETTINGS, flags,
                          note=RUN_NOTE)
-    if ONLY_FLAGGED:                                # all lines are flagged: there is no summary, only the lines
+    if ONLY_FLAGGED:                                # only the flagged lines: no summary, just the lines
         for r in rows:
             print(f"  {r['line_id']:15s} A = {r['A']:.3f} +/- {r['sigma']:.3f}  chi2_red {r['chi2_red']:.2f}  "
                   f"broadening {r['broad_kms']:.1f} km/s  continuum {r['cont']:.3f}  [{r['status']}]")

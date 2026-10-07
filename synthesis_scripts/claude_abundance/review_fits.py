@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Click through the line fits of one find_stellar_parameters run and keep or reject each one.
+Click through the line fits of one find_stellar_parameters run and keep, flag or reject each one.
 
     python review_fits.py                         # the latest run of SELECTED_STAR
     python review_fits.py <run dir>               # a specific run (e.g. a _flagged rerun)
@@ -11,18 +11,20 @@ Click through the line fits of one find_stellar_parameters run and keep or rejec
 
 Buttons, or keys:
     left / right   previous / next line
-    k              keep                    -> the line is removed from the star's flag file
-    r              reject with the reason in the text box
-    1 2 3          reject with one of the preset REASONS
+    k              keep                    -> the line's entry is removed from the star's flag file
+    f              flag with the reason in the text box   -> marked only, still used in the means and slopes
+    1 2 3          flag with one of the preset REASONS
+    r              reject with the reason in the text box -> written as "reject: <reason>", left out
     u              undo the decision for this line (restores the flag file entry as it was)
     q              quit
 Click in the text box to type a reason (Enter to finish); keys go to the text box while it is active.
 
 Every decision is saved at once to
     <run dir>/review.yaml                              what was decided in this run, with reason and time
-    data/selected_lines/<star>/fe_line_flags.yaml      rejected lines are added, kept lines removed;
-                                                       find_stellar_parameters leaves the flagged lines out
-"Keep" only lifts a manual flag: lines rejected by the automatic cuts (chi2, sigma clipping) stay rejected.
+    data/selected_lines/<star>/fe_line_flags.yaml      flagged / rejected lines are added, kept lines removed;
+                                                       find_stellar_parameters marks the flagged lines and leaves
+                                                       the ones whose reason starts with "reject" out
+"Keep" only lifts a manual entry: lines rejected by the automatic cuts (chi2, sigma clipping) stay rejected.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
-from fe_line_fit import RUNS_DIR, load_line_flags, load_lines, plot_overview, read_bestfit, save_line_flags, totals_text
+from fe_line_fit import RUNS_DIR, is_reject, load_line_flags, load_lines, plot_overview, read_bestfit, save_line_flags, totals_text
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -44,7 +46,7 @@ from fe_line_fit import RUNS_DIR, load_line_flags, load_lines, plot_overview, re
 
 SELECTED_STAR = "HD196944"
 RUN_DIR = None                       # None -> newest run in runs/<star>/fe_abundance/ (a command-line argument wins)
-REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1, 2, 3
+REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1-3 (flag)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ class Reviewer:
 
         for key in [k for k in plt.rcParams if k.startswith("keymap.")]:  # free our keys from matplotlib's
             plt.rcParams[key] = [c for c in plt.rcParams[key]
-                                 if c not in ("k", "r", "u", "q", "1", "2", "3", "left", "right")]
+                                 if c not in ("k", "f", "r", "u", "q", "1", "2", "3", "left", "right")]
 
         self.fig = plt.figure(figsize=(12, 7))
         self.fig.canvas.manager.set_window_title(f"review_fits: {run.name}")
@@ -106,16 +108,17 @@ class Reviewer:
         self.status = self.fig.text(0.07, 0.905, "", fontsize=12, weight="bold")
         self.header = self.fig.text(0.07, 0.94, "", fontsize=10)
 
-        self.box = TextBox(self.fig.add_axes([0.20, 0.13, 0.55, 0.05]), "reject reason ", initial=REASONS[0])
+        self.box = TextBox(self.fig.add_axes([0.20, 0.13, 0.55, 0.05]), "reason ", initial=REASONS[0])
         self.box.on_submit(lambda _: self.box.stop_typing())
         self.buttons = []
-        for x, label, cb in ((0.07, "< prev", lambda _: self.move(-1)), (0.25, "keep (k)", lambda _: self.keep()),
-                             (0.43, "reject (r)", lambda _: self.reject(self.box.text)),
-                             (0.61, "undo (u)", lambda _: self.undo()), (0.79, "next >", lambda _: self.move(1))):
-            b = Button(self.fig.add_axes([x, 0.04, 0.16, 0.06]), label)
+        for x, label, cb in ((0.07, "< prev", lambda _: self.move(-1)), (0.22, "keep (k)", lambda _: self.keep()),
+                             (0.37, "flag (f)", lambda _: self.flag(self.box.text)),
+                             (0.52, "reject (r)", lambda _: self.reject(self.box.text)),
+                             (0.67, "undo (u)", lambda _: self.undo()), (0.82, "next >", lambda _: self.move(1))):
+            b = Button(self.fig.add_axes([x, 0.04, 0.13, 0.06]), label)
             b.on_clicked(cb)
             self.buttons.append(b)
-        self.fig.text(0.20, 0.105, "keys 1-3 reject with: " +
+        self.fig.text(0.20, 0.105, "keys 1-3 flag with: " +
                       "   ".join(f"{n + 1}: {r}" for n, r in enumerate(REASONS)), fontsize=8, color="0.3")
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
         self.draw()
@@ -127,6 +130,8 @@ class Reviewer:
         flags = load_line_flags(self.flags_path)
         for lid, d in self.review.items():
             if d["decision"] == "reject":
+                flags[lid] = d["reason"] if is_reject(d["reason"]) else f"reject: {d['reason']}"
+            elif d["decision"] == "flag":
                 flags[lid] = d["reason"]
             else:
                 flags.pop(lid, None)
@@ -140,6 +145,9 @@ class Reviewer:
 
     def keep(self) -> None:
         self.decide("keep")
+
+    def flag(self, reason: str) -> None:
+        self.decide("flag", reason.strip() or REASONS[0])
 
     def reject(self, reason: str) -> None:
         self.decide("reject", reason.strip() or REASONS[0])
@@ -165,9 +173,9 @@ class Reviewer:
         if self.box.capturekeystrokes:                         # typing a reason
             return
         actions = {"left": lambda: self.move(-1), "right": lambda: self.move(1), "k": self.keep,
-                   "r": lambda: self.reject(self.box.text), "u": self.undo,
+                   "f": lambda: self.flag(self.box.text), "r": lambda: self.reject(self.box.text), "u": self.undo,
                    "q": lambda: self.plt.close(self.fig)}
-        actions.update({str(n + 1): (lambda s=s: self.reject(s)) for n, s in enumerate(REASONS)})
+        actions.update({str(n + 1): (lambda s=s: self.flag(s)) for n, s in enumerate(REASONS)})
         if event.key in actions:
             actions[event.key]()
 
@@ -212,16 +220,20 @@ class Reviewer:
             if r.get("other_lines_in_window") else ""
         self.header.set_text(
             f"[{self.i + 1}/{len(self.rows)}]  {lid}   EP {num(r, 'ep'):.2f} eV   EW {num(r, 'ew_mA'):.0f} mA   "
-            f"A(Fe) = {num(r, 'A'):.3f} +/- {num(r, 'sigma'):.3f}   chi2_red {num(r, 'chi2_red'):.2f}   "
+            f"A(Fe) = {num(r, 'A'):.3f} +/- {num(r, 'sigma'):.3f}   misfit {num(r, 'misfit'):.3f}   chi2_red {num(r, 'chi2_red'):.2f}   "
             f"broad {num(r, 'broad_kms'):.1f} km/s   RV {num(r, 'dv_kms'):+.2f} km/s   cont {num(r, 'cont'):.3f}\n"
             f"run: {r.get('selection', '?')}   |   NLTE levels: {r.get('nlte_levels', '?')}{others}   |   "
             f"fit region {num(r, 'chi2_left'):.2f}..{num(r, 'chi2_right'):.2f} ({r.get('region_source', 'older run')})")
         d = self.review.get(lid)
         if d is None:
             flag = load_line_flags(self.flags_path).get(lid)
-            text, color = (f"not reviewed (flagged: {flag})", "tab:orange") if flag else ("not reviewed", "0.4")
+            text, color = ((f"not reviewed ({'rejected' if is_reject(flag) else 'flagged'}: {flag})",
+                            "tab:red" if is_reject(flag) else "tab:orange") if flag else ("not reviewed", "0.4"))
         elif d["decision"] == "keep":
             text, color = "KEPT", "tab:green"
+        elif d["decision"] == "flag":
+            text, color = f"FLAGGED (still used): {d['reason']}", "tab:orange"
+            self.box.set_val(d["reason"])
         else:
             text, color = f"REJECTED: {d['reason']}", "tab:red"
             self.box.set_val(d["reason"])
@@ -241,13 +253,15 @@ def write_overview(run: Path) -> Path:
     marks = {}
     for r in rows:
         lid = r["line_id"]
+        sel = r.get("selection", "")
+        run_note = r.get("flag") or (sel[len("flagged: "):] if sel.startswith("flagged: ") else
+                                     sel[len("rejected: by hand ("):-1] if sel.startswith("rejected: by hand (") else "")
         if lid in review:
             d = review[lid]
-            marks[lid] = "review: KEEP" if d["decision"] == "keep" else f"review: REJECT ({d['reason']})"
-        elif lid in flags and not r.get("selection", "").startswith("flagged"):
-            marks[lid] = f"flagged since this run: {flags[lid]}"
-        elif r.get("selection", "").startswith("flagged") and lid not in flags:
-            marks[lid] = "flag removed since this run"
+            marks[lid] = f"review: {d['decision'].upper()}" + (f" ({d['reason']})" if d.get("reason") else "")
+        elif flags.get(lid, "") != run_note:
+            marks[lid] = (f"flag file changed since this run: {flags[lid]}" if lid in flags
+                          else "flag removed since this run")
     mode = "NLTE" if summary.get("nlte") else "LTE"
     path = run / "overview.png"
     plot_overview(rows, run, path, windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in load_lines(line_file)},

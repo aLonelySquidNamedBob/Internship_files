@@ -431,7 +431,8 @@ class FitSettings:
     a_step_warm: float = 0.15      # ... when warm-started from a previous result
     a_tol: float = 0.004           # stop when the parabola minimum moves less than this [dex]
     a_half_range: float = 1.5      # A(Fe) is confined to a_guess +/- this
-    max_synth: int = 20            # hard cap on bsyn runs per line
+    max_synth: int = 20            # hard cap on bsyn runs per line; lines that reach it are reported
+                                   # (stop_reason = max_synth in lines.csv, a note in the printout and overview)
     fit_rv: bool = True            # True: fit a small RV shift per line (absorbs line-list wavelength errors)
     rv_max: float = 3.0            # km/s, search limit when fitted
     rv_fixed: float = 0.0          # km/s, the shift applied to every line when fit_rv is False (on top of the
@@ -468,16 +469,23 @@ class FitSettings:
                                    # best fit, as the "no Fe" profile: whatever absorbs there is not iron (blends)
     no_fe_abundance: float = -20.0   # log eps(Fe) of that profile. Note that bsyn recomputes the electron pressure
                                    # with Fe removed, so other lines change slightly (see lines.csv: nofe_*)
+    trim_linelists: bool = True    # give bsyn per-line copies of the line lists that only contain lines within
+                                   # trim_margin of the synthesis range: ~3x faster per synthesis, identical
+                                   # spectra (tested next to Mg b and the Ca II triplet). Hydrogen list untouched.
+    trim_margin: float = 10.0      # [A]
     keep_synth: bool = True        # keep the synthetic spectra of every trial abundance in lines/<line>/synth/
                                    # (A<abund>_<T|F>.spec: bsyn output; .cvl: after the instrumental profile)
                                    # and the chi^2 at each of them in lines/<line>/chi2_curve.csv
     keep_files: bool = False       # keep all Turbospectrum scratch files of every line (incl. ~100 MB of log)
     make_plots: bool = True
     # line selection used by analyze()
-    chi2_factor: float = 3.0       # drop lines with chi2_red > max(chi2_factor * median(chi2_red), 1); relative
-                                   # so a too-high SNR in stars.yaml does not empty the sample, floored at 1 so
-                                   # a too-low SNR does not throw out good strong lines (their chi2 is higher
-                                   # than that of weak lines)
+    max_misfit: float | None = 0.07  # drop lines whose misfit > this (None = no cut). misfit = sqrt(rms_resid^2 -
+                                   # noise^2) / line_depth: the systematic rms residual in the fit region, beyond
+                                   # the noise, as a fraction of the line depth. Unlike chi2 it does not punish
+                                   # deep lines for the same relative error. noise is measured per line from its
+                                   # continuum pixels (model > 0.99, robust MAD), else taken from nearby lines.
+    chi2_factor: float | None = None  # optional old cut: drop lines with chi2_red > max(chi2_factor * median, 1).
+                                   # chi2 grows with the line depth for the same relative error; off by default
     sigma_clip: bool = True        # False: no sigma clipping of the Fe I lines (all lines that pass the quality
                                    # cuts are used; Fe II is never clipped)
     clip_sigma: float = 2.5        # clipping threshold (sigma of the residuals of the A = c + a*EP + b*REW fit)
@@ -533,6 +541,12 @@ def line_flags_path(cfg: StarConfig) -> Path:
     return cfg.line_file.with_name("fe_line_flags.yaml")
 
 
+def is_reject(reason: str) -> bool:
+    """A flag whose reason starts with "reject" removes the line from the means and slopes; any other reason is
+    only a note (the line is marked, but used like any other line)."""
+    return str(reason).strip().lower().startswith("reject")
+
+
 def load_line_flags(path: Path) -> dict[str, str]:
     path = Path(path)
     if not path.exists():
@@ -541,8 +555,10 @@ def load_line_flags(path: Path) -> dict[str, str]:
 
 
 def save_line_flags(path: Path, flags: dict[str, str]) -> None:
-    header = ("# Lines left out of the Fe abundance summary by find_stellar_parameters: line_id: reason.\n"
-              "# Written by review_fits.py; can also be edited by hand.\n")
+    header = ("# Manual notes on lines, line_id: reason. Written by review_fits.py; can also be edited by hand.\n"
+              "#   any reason              -> flagged: marked with an orange square / note, but used like any other line\n"
+              "#   reason starting 'reject' -> rejected by hand: left out of the means and slopes\n"
+              "#   e.g.  Fe1_6518.3657: 'reject: bad atomic data'     Fe1_5079.7397: 'strong blend'\n")
     body = yaml.safe_dump(dict(sorted(flags.items())), sort_keys=False, allow_unicode=True) if flags else ""
     Path(path).write_text(header + body)
 
@@ -686,6 +702,7 @@ class LineFitter:
         for a in (a_guess - step, a_guess, a_guess + step):
             self.at(np.clip(a, lo, hi))
 
+        stop = "max_synth"                        # unless one of the breaks below happens
         while len(self.evals) < s.max_synth:
             xs = np.array(sorted(self.evals))
             ys = np.array([self.evals[x]["chi2"] for x in xs])
@@ -701,9 +718,12 @@ class LineFitter:
                 else:
                     a_new = -c1 / (2 * c2)
                     if abs(a_new - xs[i]) < s.a_tol:
+                        stop = "converged"
                         break
-            a_new = round(float(np.clip(a_new, lo, hi)), 4)
-            if a_new in self.evals:               # ran into the search boundary
+            clipped = float(np.clip(a_new, lo, hi))
+            a_new = round(clipped, 4)
+            if a_new in self.evals:               # nothing new to evaluate
+                stop = "search_limit" if clipped in (lo, hi) else "converged"
                 break
             self.at(a_new)
 
@@ -738,7 +758,7 @@ class LineFitter:
         return dict(A=a_best, sigma=float(sigma), chi2_red=chi2_red, dv_kms=nearest["dv"],
                     model_nofe=model_nofe, no_fe_status=nofe_status,
                     broad_kms=nearest["broad"], broad_at_limit=bool(at_broad_limit), cont=nearest["cont"],
-                    n_synth=len(self.evals), at_boundary=not bracketed,
+                    n_synth=len(self.evals), stop_reason=stop, at_boundary=not bracketed,
                     model=self.model_full(a_near, nearest), used=self.region.copy())
 
 
@@ -770,6 +790,66 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
     plt.close(fig)
 
 
+def fit_quality(wl: np.ndarray, obs: np.ndarray, model: np.ndarray, used: np.ndarray, centre: float) -> dict:
+    """Ingredients of the misfit (see FitSettings.max_misfit): the noise from the continuum pixels of the window
+    (model > 0.99; 1.4826 x MAD of obs - model, needs >= 10 pixels, else nan), the rms residual over the fit
+    region and the line depth within +/- 0.05 A of the line centre."""
+    res = obs - model
+    cont = model > 0.99
+    noise = 1.4826 * float(np.median(np.abs(res[cont] - np.median(res[cont])))) if cont.sum() >= 10 else np.nan
+    near = np.abs(wl - centre) <= 0.05
+    depth = float((1.0 - model[near]).max()) if near.any() else float((1.0 - model[used]).max())
+    return dict(noise=round(noise, 5) if np.isfinite(noise) else np.nan, n_cont=int(cont.sum()),
+                rms_resid=round(float(np.sqrt(np.mean(res[used] ** 2))), 5), line_depth=round(depth, 4))
+
+
+def misfit_of(rms: float, noise: float, depth: float) -> float:
+    """Systematic rms residual beyond the noise, as a fraction of the line depth."""
+    if not (np.isfinite(rms) and np.isfinite(noise) and np.isfinite(depth)) or depth <= 0:
+        return np.nan
+    return float(np.sqrt(max(rms ** 2 - noise ** 2, 0.0)) / depth)
+
+
+def trim_linelists(paths: list[Path], lo: float, hi: float, outdir: Path) -> list[Path]:
+    """Copies of Turbospectrum line lists with only the lines in [lo, hi]; species blocks are recounted and empty
+    ones dropped (a file left empty is dropped). Lists that start with hydrogen are passed through untouched."""
+    out_paths = []
+    for path in paths:
+        text = Path(path).read_text(errors="replace").splitlines(keepends=True)
+        first = next((_LL_HEADER.match(t) for t in text if t.startswith("'")), None)
+        if first is None or float(first[1]) < 1.5:            # hydrogen (special profiles) or unknown format
+            out_paths.append(Path(path))
+            continue
+        out, block, name, kept = [], None, None, []
+
+        def flush():
+            if block is not None and kept:
+                out.append(f"'{block[0]}' {block[1]} {len(kept)}\n")
+                out.append(name)
+                out.extend(kept)
+
+        i = 0
+        while i < len(text):
+            h = _LL_HEADER.match(text[i])
+            if h:
+                flush()
+                block, name, kept = (h[1], h[2]), text[i + 1], []
+                i += 2
+                continue
+            try:
+                if lo <= float(text[i].split(None, 1)[0]) <= hi:
+                    kept.append(text[i])
+            except (ValueError, IndexError):
+                pass
+            i += 1
+        flush()
+        if out:
+            dst = outdir / f"ll_{len(out_paths):02d}_{Path(path).name}"
+            dst.write_text("".join(out))
+            out_paths.append(dst)
+    return out_paths
+
+
 def fit_one_line(job: dict) -> dict:
     """Worker: one line, own scratch directory. Never raises; failures go into `status`."""
     row, s = job["line"], job["settings"]
@@ -778,9 +858,10 @@ def fit_one_line(job: dict) -> dict:
                ep=float(row["excitation_potential"]), ew_mA=float(row["voigt_fit_area"]),
                rew=float(np.log10(row["voigt_fit_area"] / 1000.0 / w)),
                A=np.nan, sigma=np.nan, chi2_red=np.nan, dv_kms=np.nan, broad_kms=np.nan, broad_at_limit=False,
-               cont=np.nan, npts=int(len(job["wl"])), n_synth=0, at_boundary=False,
+               cont=np.nan, npts=int(len(job["wl"])), n_synth=0, stop_reason="", at_boundary=False,
                chi2_left=round(job["fit_lo"], 4), chi2_right=round(job["fit_hi"], 4), region_source=job["region_source"],
                nofe_depth_centre=np.nan, nofe_depth_max=np.nan, no_fe_status="off",
+               noise=np.nan, n_cont=0, rms_resid=np.nan, line_depth=np.nan, misfit=np.nan, noise_source="",
                other_lines_in_window=job["neighbours"], nlte_levels=job["nlte_levels"], status="ok")
     outdir = Path(job["outdir"])
     outdir.mkdir(parents=True, exist_ok=True)
@@ -792,13 +873,17 @@ def fit_one_line(job: dict) -> dict:
             return res
         win_lo, win_hi = job["win_lo"], job["win_hi"]
         data = Data(w, max(w - win_lo, win_hi - w), job["wl"], job["fl"], np.full(len(job["wl"]), 1.0 / job["snr"]))
-        synth = LineSynth(job["cfg"], job["atm"], win_lo - s.synth_pad, win_hi + s.synth_pad,
-                          workdir, workdir / "log.txt")
+        cfg = job["cfg"]
+        if s.trim_linelists:
+            cfg = dataclasses.replace(cfg, linelists=trim_linelists(
+                cfg.linelists, win_lo - s.synth_pad - s.trim_margin, win_hi + s.synth_pad + s.trim_margin, workdir))
+        synth = LineSynth(cfg, job["atm"], win_lo - s.synth_pad, win_hi + s.synth_pad, workdir, workdir / "log.txt")
         region = (data.wl >= job["fit_lo"]) & (data.wl <= job["fit_hi"])
         fitter = LineFitter(synth, data, job["nlte"], s, job["fixed_broad"], region)
         out = fitter.run(job["a_guess"], job["warm"])
         model, used, nofe = out.pop("model"), out.pop("used"), out.pop("model_nofe")
         res.update(out)
+        res.update(fit_quality(data.wl, data.fl, model, used, w))
         if np.isfinite(nofe).any():                           # absorption of everything that is not iron
             res["nofe_depth_centre"] = round(float(1.0 - nofe[np.abs(data.wl - w) <= 0.03].min()), 4)
             res["nofe_depth_max"] = round(float(1.0 - nofe[used].min()), 4)
@@ -1002,6 +1087,10 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
         shutil.rmtree(ll_dir, ignore_errors=True)
 
     results.sort(key=lambda r: r["wavelength"])
+    capped = [r["line_id"] for r in results if r.get("stop_reason") == "max_synth"]
+    if capped:
+        print(f"    NOTE: {len(capped)} line(s) reached max_synth = {s.max_synth} syntheses without converging to "
+              f"a_tol = {s.a_tol}: {', '.join(capped)}", flush=True)
     write_csv(outdir / "lines.csv", results)
     return results
 
@@ -1010,24 +1099,45 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
 # Diagnostics: excitation / ionisation balance and microturbulence
 # ---------------------------------------------------------------------------
 
+def fill_misfit(rows: list[dict]) -> None:
+    """Set `misfit` (and `noise_source`) for every fitted line. A line without enough continuum pixels gets the
+    median noise of the lines within +/- 300 A (else of all lines); the noise varies with wavelength."""
+    wl = col(rows, "wavelength")
+    noise = np.array([r.get("noise", np.nan) for r in rows], float)
+    have = np.isfinite(noise)
+    for k, r in enumerate(rows):
+        n, src = noise[k], "window"
+        if not np.isfinite(n) and have.any():
+            near = have & (np.abs(wl - wl[k]) <= 300)
+            n, src = (float(np.median(noise[near])), "lines within 300 A") if near.any() else \
+                     (float(np.median(noise[have])), "all lines")
+        r["noise_source"] = src if np.isfinite(n) else "none"
+        r["misfit"] = round(misfit_of(r.get("rms_resid", np.nan), n, r.get("line_depth", np.nan)), 4)
+
+
 def quality_reasons(rows: list[dict], s: FitSettings, flags: dict[str, str] | None = None) -> list[str]:
     """Why each line is left out of the summary before sigma clipping ("" = candidate).
-    A manual flag wins over everything else; then failed fits, unbracketed chi^2 minima and the chi^2 cut."""
-    flags = flags or {}
+    A manual reject (flag reason starting with "reject") wins over everything else; then failed fits, unbracketed
+    chi^2 minima, the misfit cut and (if set) the old chi^2 cut. Other flags are notes only."""
+    rejects = {k: v for k, v in (flags or {}).items() if is_reject(v)}
+    fill_misfit(rows)
     chi = col(rows, "chi2_red")
     fitted = np.array([r["status"] == "ok" and not r["at_boundary"] and np.isfinite(r["A"]) and np.isfinite(r["sigma"])
                        for r in rows])
-    unflagged = np.array([r["line_id"] not in flags for r in rows])
-    base = fitted & unflagged
-    cut = max(s.chi2_factor * np.median(chi[base]), 1.0) if base.any() else np.inf
+    not_rejected = np.array([r["line_id"] not in rejects for r in rows])
+    base = fitted & not_rejected
+    cut = max(s.chi2_factor * np.median(chi[base]), 1.0) if (s.chi2_factor and base.any()) else np.inf
     out = []
     for r, c in zip(rows, chi):
-        if r["line_id"] in flags:
-            out.append(f"flagged: {flags[r['line_id']]}")
+        if r["line_id"] in rejects:
+            why = re.sub(r"^\s*reject(ed)?\s*[:\-]?\s*", "", rejects[r["line_id"]], flags=re.I) or "no reason given"
+            out.append(f"rejected: by hand ({why})")
         elif r["status"] != "ok":
             out.append(f"rejected: {r['status']}")
         elif r["at_boundary"] or not (np.isfinite(r["A"]) and np.isfinite(r["sigma"])):
             out.append("rejected: chi2 minimum not bracketed (A at the search limit)")
+        elif s.max_misfit is not None and np.isfinite(r["misfit"]) and r["misfit"] > s.max_misfit:
+            out.append(f"rejected: misfit {r['misfit']:.3f} > {s.max_misfit:g}")
         elif c > cut:
             out.append(f"rejected: chi2_red {c:.2f} > cut {cut:.2f}")
         else:
@@ -1038,8 +1148,9 @@ def quality_reasons(rows: list[dict], s: FitSettings, flags: dict[str, str] | No
 def analyze(rows: list[dict], s: FitSettings | None = None, flags: dict[str, str] | None = None) -> dict:
     """Mean abundances and slopes. Fe I lines are sigma-clipped on the residuals of a joint
     A = c + a*EP + b*REW fit; Fe II lines are not clipped (there are too few). `flags` maps line_id -> reason
-    for lines you excluded by hand. info["selection"] holds, aligned with rows, "used", "sigma-clipped (...)",
-    "flagged: ..." or "rejected: ..." for every line."""
+    (fe_line_flags.yaml): reasons starting with "reject" remove the line, all others are notes. info["selection"]
+    holds, aligned with rows, "used", "sigma-clipped (...)" or "rejected: ..." for every line, info["flag"] the
+    note ("" if none)."""
     s = s or FitSettings()
     selection = quality_reasons(rows, s, flags)
     ok = np.array([sel == "" for sel in selection])
@@ -1068,13 +1179,18 @@ def analyze(rows: list[dict], s: FitSettings | None = None, flags: dict[str, str
     A2 = A[m2]
 
     ids = [r["line_id"] for r in rows]
+    flag = [(flags or {}).get(i, "") for i in ids]
+    by_hand = [sel.startswith("rejected: by hand") for sel in selection]
     info: dict = dict(n_fe1=len(A1k), n_fe1_clipped=int(len(A1) - len(A1k)), n_fe2=len(A2),
-                      n_flagged=sum(sel.startswith("flagged") for sel in selection),
-                      n_rejected=sum(sel.startswith("rejected") for sel in selection),
+                      n_flagged=sum(bool(f) and not is_reject(f) for f in flag),
+                      n_rejected_by_hand=sum(by_hand),
+                      n_rejected=sum(sel.startswith("rejected") and not h for sel, h in zip(selection, by_hand)),
                       used_ids=[i for i, sel in zip(ids, selection) if sel == "used"],
                       clipped_ids=[i for i, sel in zip(ids, selection) if sel.startswith("sigma-clipped")],
-                      flagged_ids=[i for i, sel in zip(ids, selection) if sel.startswith("flagged")],
-                      selection=selection)
+                      flagged_ids=[i for i, f in zip(ids, flag) if f and not is_reject(f)],
+                      rejected_by_hand_ids=[i for i, h in zip(ids, by_hand) if h],
+                      max_synth_ids=[r["line_id"] for r in rows if r.get("stop_reason") == "max_synth"],
+                      selection=selection, flag=flag)
     nan = float("nan")
     if len(A1k) >= 4:
         sl_ep, ic_ep, er_ep = linfit(ep1, A1k)
@@ -1103,8 +1219,11 @@ def print_summary(info: dict) -> None:
     print(f"  slope vs EP  = {info['slope_ep']:+.4f} +/- {info['slope_ep_err']:.4f} dex/eV")
     print(f"  slope vs REW = {info['slope_rew']:+.4f} +/- {info['slope_rew_err']:.4f} dex/dex")
     print(f"  sigma-clipped: {', '.join(info['clipped_ids']) or '-'}")
-    print(f"  flagged by hand: {', '.join(info['flagged_ids']) or '-'}")
+    print(f"  flagged by hand (marked, still used if they pass the cuts): {', '.join(info['flagged_ids']) or '-'}")
+    print(f"  rejected by hand: {', '.join(info['rejected_by_hand_ids']) or '-'}")
     print(f"  rejected by the quality cuts: {info['n_rejected']} (see `selection` in lines.csv)")
+    if info.get("max_synth_ids"):
+        print(f"  NOTE: maximum number of syntheses reached (not converged to a_tol): {', '.join(info['max_synth_ids'])}")
 
 
 def totals_text(info: dict) -> str:
@@ -1122,8 +1241,9 @@ def totals_text(info: dict) -> str:
 
 
 def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") -> None:
-    """A(Fe) against EP, REW and wavelength. Filled = used, x = sigma-clipped, open square = flagged by hand,
-    open circle = rejected by the quality cuts. The y range follows the used lines; points beyond it are
+    """A(Fe) against EP, REW and wavelength. Filled = used, x = sigma-clipped, open circle = rejected by the quality
+    cuts, red diamond = rejected by hand; an orange square around a point = flagged by hand (a note, the point is
+    treated like the others). The y range follows the used lines; points beyond it are
     drawn on the edge as triangles."""
     try:
         import matplotlib
@@ -1132,7 +1252,9 @@ def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") 
     except ImportError:
         return
     ion, A, sig = col(rows, "ion"), col(rows, "A"), col(rows, "sigma")
-    kind = np.array([sel.split(" ")[0].rstrip(":") for sel in info["selection"]])   # used/sigma-clipped/...
+    kind = np.array(["rejected-hand" if sel.startswith("rejected: by hand") else sel.split(" ")[0].rstrip(":")
+                     for sel in info["selection"]])                              # used/sigma-clipped/rejected/...
+    flagged = np.array([bool(f) and not is_reject(f) for f in info.get("flag", [""] * len(rows))])
     used = kind == "used"
     if used.any():
         lo, hi = A[used].min() - 0.25, A[used].max() + 0.25
@@ -1142,8 +1264,9 @@ def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") 
     panels = [("ep", "Excitation potential [eV]", "ep"), ("rew", "log(EW/lambda)", "rew"),
               ("wavelength", "Wavelength [A]", None)]
     styles = {"sigma-clipped": dict(marker="x", color="0.35", ls="none", ms=6, label="sigma-clipped"),
-              "flagged": dict(marker="s", mfc="none", mec="tab:orange", ls="none", ms=7, label="flagged by hand"),
-              "rejected": dict(marker="o", mfc="none", mec="0.6", ls="none", ms=6, label="rejected (quality)")}
+              "flagged": dict(marker="s", mfc="none", mec="tab:orange", ls="none", ms=7, label="flagged (older run)"),
+              "rejected": dict(marker="o", mfc="none", mec="0.6", ls="none", ms=6, label="rejected (quality)"),
+              "rejected-hand": dict(marker="D", mfc="none", mec="tab:red", ls="none", ms=6, label="rejected by hand")}
     for ax, (name, label, key) in zip(axes, panels):
         x = col(rows, name)
         for k, color in ((1, "tab:blue"), (2, "tab:red")):
@@ -1152,12 +1275,18 @@ def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") 
                         label=f"Fe {'I' * k} used")
         for kd, st in styles.items():
             sel = (kind == kd) & np.isfinite(A)
+            if not sel.any():                                               # no empty legend entries
+                continue
             inside = sel & (A >= lo) & (A <= hi)
             ax.plot(x[inside], A[inside], **st)
             for edge, below in ((lo, True), (hi, False)):
                 off = sel & ((A < lo) if below else (A > hi))
                 ax.plot(x[off], np.full(off.sum(), edge), marker="v" if below else "^", ls="none",
                         color=st.get("color", st.get("mec")), ms=6)
+        sel = flagged & np.isfinite(A)                                      # orange square around flagged points
+        if sel.any():
+            ax.plot(x[sel], np.clip(A[sel], lo, hi), marker="s", mfc="none", mec="tab:orange", mew=1.3, ls="none",
+                    ms=10, label="flagged by hand")
         if key and np.isfinite(info[f"slope_{key}"]):
             xx = np.array([x[used & (ion == 1)].min(), x[used & (ion == 1)].max()])
             ax.plot(xx, info[f"icpt_{key}"] + info[f"slope_{key}"] * xx, "b-", lw=0.8)
@@ -1252,10 +1381,17 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
             color_b = "tab:purple"
             ax.text(0.98, 0.04, "broadening at limit", transform=ax.transAxes, fontsize=6.5, color=color_b,
                     ha="right", va="bottom")
+        if str(r.get("stop_reason", "")) == "max_synth":
+            ax.text(0.98, 0.14, "max syntheses reached", transform=ax.transAxes, fontsize=6.5, color="tab:purple",
+                    ha="right", va="bottom")
+        note = str(r.get("flag", "") or "")
+        if note and not is_reject(note):
+            ax.text(0.02, 0.96, f"flag: {note}"[:45], transform=ax.transAxes, fontsize=6.5, color="tab:orange",
+                    va="top", weight="bold")
         short = {"used": "used", "sigma-clipped": "sigma-clipped", "flagged": "flagged",
                  "rejected": sel.replace("rejected: ", "rej: ")[:34]}.get(selection_kind(sel), sel[:34])
         ax.set_title(f"{n}. {lid}  A={f(r, 'A'):.2f}+/-{f(r, 'sigma'):.2f}\n"
-                     f"chi2r {f(r, 'chi2_red'):.2f}  b {f(r, 'broad_kms'):.1f}  c {f(r, 'cont'):.3f}  {short}",
+                     f"misfit {f(r, 'misfit'):.3f}  chi2r {f(r, 'chi2_red'):.2f}  b {f(r, 'broad_kms'):.1f}  {short}",
                      fontsize=7, color=color, loc="left")
         if lid in marks:
             ax.text(0.02, 0.04, marks[lid], transform=ax.transAxes, fontsize=6.5, color="tab:blue",
@@ -1267,8 +1403,8 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
         ax.ticklabel_format(useOffset=False, axis="x")
     for ax in list(axes.flat)[len(rows):]:
         ax.axis("off")
-    fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, orange flagged by hand, red rejected "
-                 "by the quality cuts;  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
+    fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, red rejected "
+                 "(quality cuts or by hand);  orange text: flagged by hand (still used);  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
                  "bottom trace: obs - fit", fontsize=10,
                  y=1 - 0.25 / (2.5 * nrows + head), va="top")
     fig.subplots_adjust(left=0.02, right=0.99, bottom=0.02, top=1 - head / (2.5 * nrows + head),
