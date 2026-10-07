@@ -63,9 +63,9 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 
 SELECTED_STAR = "HD196944"
 
-TEFF = 5200.0                        # K
-LOGG = 1.70                          # dex (cgs)
-VMIC = 1.35                          # km/s
+TEFF = 5228.0                        # K
+LOGG = 1.82                          # dex (cgs)
+VMIC = 1.45                          # km/s
 FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.50 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
 
@@ -264,8 +264,8 @@ def main() -> None:
     mode = "NLTE" if NLTE == "T" else "LTE"
 
     outdir = (RUNS_DIR / SELECTED_STAR / "fe_abundance" /
-              f"T{TEFF:.0f}_g{LOGG:.2f}_v{VMIC:.2f}_z{FEH:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}"
-              f"_{time.strftime('%Y%m%d_%H%M%S')}")
+              f"{time.strftime('%Y%m%d_%H%M%S')}_"
+              f"T{TEFF:.0f}_g{LOGG:.2f}_v{VMIC:.2f}_z{FEH:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}")
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.yaml").write_text(yaml.dump(cfg.raw))
     for f in (Path(__file__), Path(__file__).with_name("fe_line_fit.py")):
