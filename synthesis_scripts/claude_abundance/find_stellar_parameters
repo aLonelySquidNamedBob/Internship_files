@@ -6,7 +6,7 @@ Run it as a plain script: edit the settings below, then `python find_stellar_par
 
 What it does (one pass, nothing is iterated, so a run is fully set by the settings below):
   1. interpolates a MARCS atmosphere + Fe departure coefficients at (TEFF, LOGG, FEH) with
-     interp_nlte_2.py; the departure coefficients are computed for A(Fe) = 7.50 + FEH,
+     interp_nlte_2.py; the departure coefficients are computed for A(Fe) = 7.45 + FEH (SOLAR_FE),
   2. fits A(Fe) line by line with fe_line_fit.fit_lines (see fe_line_fit.py for the method),
   3. writes the per-line table and a summary: mean A(Fe I), A(Fe II), their difference and the
      slopes of A(Fe I) against excitation potential and reduced EW. These are for inspection only;
@@ -66,7 +66,7 @@ SELECTED_STAR = "HD196944"
 TEFF = 5228.0                        # K
 LOGG = 1.82                          # dex (cgs)
 VMIC = 1.45                          # km/s
-FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.50 + FEH for the departure coeffs
+FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
@@ -99,7 +99,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
 # [alpha/Fe]); Fe follows FEH; the fitted element (Fe) always gets its trial value, whatever is set here.
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
 REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
-                                     # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.50)
+                                     # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.45; the solar value cancels)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
                                      # reference file and abu_c in stars.yaml.
     # "Ba": 1.19,                    # e.g. HD196944: the [Ba/Fe] = [Ce/Fe] value instead of the 3D NLTE 1.15

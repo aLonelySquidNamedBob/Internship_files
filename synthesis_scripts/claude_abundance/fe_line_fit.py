@@ -73,7 +73,10 @@ BABSMA = TS_DIR / "exec-gf" / "babsma_lu"
 BSYN = TS_DIR / "exec-gf" / "bsyn_lu"
 FALTBON = TS_DIR / "Utilities" / "faltbon"
 
-SOLAR_FE = 7.50          # only used to convert A(Fe) <-> [Fe/H]
+SOLAR_FE = 7.45          # A(Fe) of the Sun on the scale of the MARCS models and of Turbospectrum (abund_source
+                         # 'asp2007' = Grevesse, Asplund & Sauval 2007): the atmosphere's [Fe/H] is relative to it.
+                         # Used for A(Fe) <-> [Fe/H], the A(Fe) of the departure coefficients and the 'fe'
+                         # reference scaling (where it cancels: the shift is A(Fe)_model - A(Fe)_reference)
 DW = 0.01                # synthesis wavelength step [A]
 SPHERICAL_RT = False     # bsyn 'SPHERICAL:' flag. Your old scripts use F, even with spherical MARCS models.
 DEFAULT_VMIC = 1.0

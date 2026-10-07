@@ -33,6 +33,7 @@ HD115444:
 HD196944:
   name: "HD 196944"
   spectra:
+    instrument_fwhm: -3.0
     raw:
       - "data/observed_spectra/HD196944/HD196944.coadd"
     normalized:
@@ -51,10 +52,13 @@ HD196944:
     NLTE_element: "Fe"
     NLTE_abundance: 5.50
     
-    metallicity: -1.95
+    teff: 5228
+    logg: 1.82
+    metallicity: -2.29
     alpha_fe: 0.40
     abu_c: 7.46
-    vmic: null # default is 1
+    vmic: 1.45 # default is 1
+    vmac: 5.5 # faltbon input, rad-tan, so vmac is actually 5.5 * 1.443 = 7.9 km/s
 
     molecular_line_lists:
       - "CC"
