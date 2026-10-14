@@ -33,7 +33,7 @@ molecular:
 
   TiO:
     - "/home/student/NICO/ll/molecules/46TiO_GESv5.bsyn"
-    - "/home/student/NICO/ll/molecules/47TiO_GESv5.bsyn"
+    - "/home/student/NICO/TiO_ll/47TiO-bsyn_3000-8900_lab.list"   # ll/molecules/47TiO_GESv5.bsyn is truncated (header: 3925210 lines, file: ~96000)
     - "/home/student/NICO/ll/molecules/48TiO_GESv5.bsyn"
     - "/home/student/NICO/ll/molecules/49TiO_GESv5.bsyn"
     - "/home/student/NICO/ll/molecules/50TiO_GESv5.bsyn"
