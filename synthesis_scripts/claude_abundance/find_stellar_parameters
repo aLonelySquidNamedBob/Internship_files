@@ -61,12 +61,12 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD196944"
+SELECTED_STAR = "HD2454"
 
-TEFF = 5228.0                        # K
-LOGG = 1.82                          # dex (cgs)
-VMIC = 1.45                          # km/s
-FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+TEFF = 6350                        # K
+LOGG = 3.80                          # dex (cgs)
+VMIC = 1.95                          # km/s
+FEH = -0.44                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
@@ -75,24 +75,27 @@ RUN_NOTE = ""                        # what is special about this run, e.g. "vmi
 LINE_FILE = None                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
     n_jobs=12,
-    half_window=0.4,                 # default fit region = line centre +/- this [A]; every pixel in it is fitted.
+    half_window=0.6,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
+    window_ref_wavelength=5000.0,    # with lambda (constant in km/s); None = the same width in A everywhere.
                                      # Per line it is overridden by the chi2_left / chi2_right columns of the line CSV
-    broad_profile="radtan",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
+    broad_profile="gauss",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
                                      # the number) or "gauss" (profile 2, the number is the FWHM)
     fit_broadening=False,            # True: fit the extra broadening per line (0..broad_max); False: use the
-    broadening=5.5,                  # fixed value in km/s for every line (only used when fit_broadening=False)
-    broad_max=12.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
+    broadening=12.5,                  # fixed value in km/s for every line (only used when fit_broadening=False)
+    broad_max=20.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
     rv_fixed=0.0,                    # shift for every line when fit_rv=False
-    sigma_clip=True,                 # False: no sigma clipping of the Fe I lines (threshold clip_sigma = 2.5)
+    sigma_clip=True,                 # False: no sigma clipping of the Fe I lines
+    clip_sigma=3.00,                 # threshold clip_sigma = 2.5
     max_misfit=0.07,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
                                      # fraction of the line depth; `misfit` in lines.csv) is larger; None = no cut
     chi2_factor=None,                # optional old cut chi2_red > max(chi2_factor x median, 1); it punishes deep lines
-    fit_continuum=True,             # True: also fit a local continuum scale per line (weak prior around 1)
+    fit_continuum=False,              # True: also fit a local continuum scale per line (weak prior around 1)
     fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
     a_tol=0.001,
+    a_local=0.05,                    # the final parabola must use points within this of the best one [dex]
 )
 # Abundances of the other elements (blends, molecules, electron donors), given to babsma and bsyn as INDIVIDUAL
 # ABUNDANCES. Anything not set below or in the reference file stays scaled solar for FEH (with the atmosphere's
@@ -189,7 +192,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
     plot_overview(rows, outdir, outdir / "overview.png",
                   windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in lines},
                   title=f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}",
-                  totals=totals_text(info))
+                  totals=totals_text(info), fit_settings=dataclasses.asdict(settings))
     if not KEEP_LINE_FILES:
         shutil.rmtree(outdir / "lines", ignore_errors=True)
 

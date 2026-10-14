@@ -118,7 +118,8 @@ HE22081239:
     abu_c: 7.31
     vmic: null # default is 1
 
-    molecular_line_lists:
+    molecular_line_lists: 
+      - "CH"
 
   notes: null
   
