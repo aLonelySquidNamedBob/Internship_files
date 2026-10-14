@@ -14,7 +14,8 @@ Usage:
     info = analyze(rows)                                   # mean A(Fe I/II), slopes, ...
 
 Per line:
-  * the fit region is the line centre +/- FitSettings.half_window (0.4 A), so it contains continuum on
+  * the fit region is the line centre +/- FitSettings.half_window (0.4 A at 5000 A, scaled with the
+    wavelength: window_ref_wavelength), so it contains continuum on
     both sides, or the bounds chi2_left / chi2_right given for that line in the line CSV (blank = default);
     all its pixels are fitted, neighbouring features included (fit_left/fit_right from the CSV are only
     drawn in the plots),
@@ -426,13 +427,20 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 @dataclass
 class FitSettings:
     n_jobs: int = 8                # parallel lines (you have 8 physical cores)
+    window_ref_wavelength: float | None = 5000.0  # half_window applies at this wavelength and scales with lambda
+                                   # (constant in velocity, like the line widths: 0.4 A at 5000 A = +/-24 km/s ->
+                                   # 0.52 A at 6500 A, 0.71 A at 8800 A); None: half_window in A everywhere
     half_window: float = 0.4       # default fit region = line centre +/- this [A] (per line overridden by the
                                    # chi2_left / chi2_right columns of the line CSV)
     synth_pad: float = 1.0         # synthesis range extends this far [A] beyond the fit window (RV shift and
                                    # broadening kernel need margin)
     a_step_first: float = 0.30     # initial A(Fe) bracket half-width, no previous result [dex]
     a_step_warm: float = 0.15      # ... when warm-started from a previous result
-    a_tol: float = 0.004           # stop when the parabola minimum moves less than this [dex]
+    a_tol: float = 0.004           # stop when the parabola minimum moves less than this [dex] ...
+    a_local: float = 0.05          # ... and both neighbours of the best point are within this [dex]: the final
+                                   # parabola (A and sigma) must come from points close to the minimum. chi2(A) is
+                                   # not a parabola over 0.3-0.6 dex; without this the vertex could land on the
+                                   # best point by chance (Fe1 4802.88 in HD2454: 6.871 reported, 6.94 true)
     a_half_range: float = 1.5      # A(Fe) is confined to a_guess +/- this
     max_synth: int = 20            # hard cap on bsyn runs per line; lines that reach it are reported
                                    # (stop_reason = max_synth in lines.csv, a note in the printout and overview)
@@ -524,12 +532,55 @@ def load_lines(path: Path) -> list[dict]:
     return rows
 
 
+def half_window_at(wavelength: float, s: "FitSettings") -> float:
+    """The default half-width of the window at this wavelength: half_window scaled by lambda / window_ref_wavelength
+    (constant in velocity), or half_window itself when window_ref_wavelength is None."""
+    if s.window_ref_wavelength:
+        return s.half_window * wavelength / s.window_ref_wavelength
+    return s.half_window
+
+
+def set_line_region(path: Path, line_id: str, lo: float | None, hi: float | None) -> None:
+    """Write the manual fit region (chi2_left / chi2_right) of one line into the selected-lines CSV; lo = hi = None
+    clears it (blank cells = default region). Every other cell, the column order and the line endings (CRLF or
+    LF) are kept; the two columns are appended if the file does not have them yet."""
+    path = Path(path)
+    raw = path.read_bytes()
+    eol = "\r\n" if b"\r\n" in raw[:4096] else "\n"
+    rows = list(csv.reader(raw.decode().splitlines()))
+    head = [h.strip() for h in rows[0]]
+    for col in ("chi2_left", "chi2_right"):
+        if col not in head:
+            head.append(col)
+            rows[0].append(col)
+            for r in rows[1:]:
+                r.append("")
+    iw, isp, il, ir = head.index("wavelength"), head.index("species"), head.index("chi2_left"), head.index("chi2_right")
+    hits = [r for r in rows[1:] if r and f"Fe{int(r[isp].split()[1])}_{float(r[iw]):.4f}" == line_id]
+    if len(hits) != 1:
+        raise ValueError(f"{line_id}: found {len(hits)} rows in {path}")
+    row = hits[0]
+    while len(row) < len(head):
+        row.append("")
+    if lo is None:
+        row[il] = row[ir] = ""
+    else:
+        if not lo < float(row[iw]) < hi:
+            raise ValueError(f"{line_id}: the region {lo}..{hi} must contain the line ({float(row[iw])})")
+        row[il], row[ir] = f"{lo:.3f}", f"{hi:.3f}"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="") as f:
+        csv.writer(f, lineterminator=eol).writerows(rows)
+    tmp.replace(path)
+
+
 def line_region(row: dict, s: "FitSettings") -> tuple[float, float, float, float, str]:
     """(window_lo, window_hi, fit_lo, fit_hi, source) of a line. The window is what is observed, plotted and
-    synthesised (centre +/- half_window, widened if a manual region reaches further); the fit bounds are the
+    synthesised (centre +/- half_window_at(), widened if a manual region reaches further); the fit bounds are the
     pixels that enter chi^2: the manual chi2_left / chi2_right if set, else per settings.fit_region."""
     w = row["wavelength"]
-    lo, hi = w - s.half_window, w + s.half_window
+    half = half_window_at(w, s)
+    lo, hi = w - half, w + half
     if row.get("chi2_left") is not None:
         return min(lo, row["chi2_left"]), max(hi, row["chi2_right"]), row["chi2_left"], row["chi2_right"], "manual"
     if s.fit_region == "line":
@@ -705,6 +756,14 @@ class LineFitter:
         for a in (a_guess - step, a_guess, a_guess + step):
             self.at(np.clip(a, lo, hi))
 
+        def local_probe(xs, i):
+            """A point a_local/2 from the best one on the side whose neighbour is farther than a_local (the
+            farther side first), or None when both neighbours are close."""
+            dl, dr = xs[i] - xs[i - 1], xs[i + 1] - xs[i]
+            if max(dl, dr) <= s.a_local + 1e-9:
+                return None
+            return xs[i] - s.a_local / 2 if dl >= dr else xs[i] + s.a_local / 2
+
         stop = "max_synth"                        # unless one of the breaks below happens
         while len(self.evals) < s.max_synth:
             xs = np.array(sorted(self.evals))
@@ -720,12 +779,20 @@ class LineFitter:
                     a_new = xs[i - 1] - step if ys[i - 1] < ys[i + 1] else xs[i + 1] + step
                 else:
                     a_new = -c1 / (2 * c2)
-                    if abs(a_new - xs[i]) < s.a_tol:
-                        stop = "converged"
-                        break
+                    if abs(a_new - xs[i]) < s.a_tol:          # minimum found - but on close points?
+                        a_new = local_probe(xs, i)
+                        if a_new is None:
+                            stop = "converged"
+                            break
             clipped = float(np.clip(a_new, lo, hi))
             a_new = round(clipped, 4)
-            if a_new in self.evals:               # nothing new to evaluate
+            if a_new in self.evals and 0 < i < len(xs) - 1 and clipped not in (lo, hi):
+                a_new = local_probe(xs, i)        # the vertex fell on an existing point: refine locally
+                a_new = None if a_new is None else round(float(np.clip(a_new, lo, hi)), 4)
+                if a_new is None or a_new in self.evals:
+                    stop = "converged"
+                    break
+            elif a_new in self.evals:             # nothing new to evaluate
                 stop = "search_limit" if clipped in (lo, hi) else "converged"
                 break
             self.at(a_new)
@@ -736,6 +803,7 @@ class LineFitter:
         bracketed = 0 < i < len(xs) - 1
         curvature = np.nan
         a_best = float(xs[i])
+        bracket = float(max(xs[i] - xs[i - 1], xs[i + 1] - xs[i])) if bracketed else np.nan
         if bracketed:
             c2, c1, _ = np.polyfit(xs[i - 1:i + 2], ys[i - 1:i + 2], 2)
             if c2 > 0:
@@ -761,7 +829,7 @@ class LineFitter:
         return dict(A=a_best, sigma=float(sigma), chi2_red=chi2_red, dv_kms=nearest["dv"],
                     model_nofe=model_nofe, no_fe_status=nofe_status,
                     broad_kms=nearest["broad"], broad_at_limit=bool(at_broad_limit), cont=nearest["cont"],
-                    n_synth=len(self.evals), stop_reason=stop, at_boundary=not bracketed,
+                    n_synth=len(self.evals), stop_reason=stop, bracket_dex=round(bracket, 4), at_boundary=not bracketed,
                     model=self.model_full(a_near, nearest), used=self.region.copy())
 
 
@@ -861,7 +929,7 @@ def fit_one_line(job: dict) -> dict:
                ep=float(row["excitation_potential"]), ew_mA=float(row["voigt_fit_area"]),
                rew=float(np.log10(row["voigt_fit_area"] / 1000.0 / w)),
                A=np.nan, sigma=np.nan, chi2_red=np.nan, dv_kms=np.nan, broad_kms=np.nan, broad_at_limit=False,
-               cont=np.nan, npts=int(len(job["wl"])), n_synth=0, stop_reason="", at_boundary=False,
+               cont=np.nan, npts=int(len(job["wl"])), n_synth=0, stop_reason="", bracket_dex=np.nan, at_boundary=False,
                chi2_left=round(job["fit_lo"], 4), chi2_right=round(job["fit_hi"], 4), region_source=job["region_source"],
                nofe_depth_centre=np.nan, nofe_depth_max=np.nan, no_fe_status="off",
                noise=np.nan, n_cont=0, rms_resid=np.nan, line_depth=np.nan, misfit=np.nan, noise_source="",
@@ -1328,7 +1396,7 @@ def read_bestfit(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
 
 def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str, tuple] | None = None,
                   title: str = "", marks: dict[str, str] | None = None, ncols: int = 8,
-                  totals: str = "") -> None:
+                  totals: str = "", fit_settings: dict | None = None) -> None:
     """All line fits of a run in one image (from lines/<line_id>/bestfit.csv), sorted by wavelength and
     numbered. Panel colour = selection (black used, grey sigma-clipped, orange flagged, red rejected); the grey
     trace at the bottom of each panel is obs - fit around a zero line. `windows` (line_id -> (left, right))
@@ -1343,7 +1411,13 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
     windows, marks = windows or {}, marks or {}
     nrows = -(-len(rows) // ncols)
     head = 1.55                                           # inches for the figure title above the first row
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.1 * ncols, 2.5 * nrows + head), squeeze=False)
+    row_h = 2.35                                          # inches per row (three-line panel titles)
+    fs = fit_settings or {}
+    fitted = dict(rv=fs.get("fit_rv", True),              # older runs: these were always fitted / never
+                  broad=fs.get("fit_broadening", fs.get("broadening") is None),
+                  cont=fs.get("fit_continuum", False))
+    profile = fs.get("broad_profile", "")
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.1 * ncols, row_h * nrows + head), squeeze=False)
 
     def f(r, k):
         if k == "broad_kms" and k not in r:                  # runs made before the rename
@@ -1393,9 +1467,12 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
                     va="top", weight="bold")
         short = {"used": "used", "sigma-clipped": "sigma-clipped", "flagged": "flagged",
                  "rejected": sel.replace("rejected: ", "rej: ")[:34]}.get(selection_kind(sel), sel[:34])
-        ax.set_title(f"{n}. {lid}  A={f(r, 'A'):.2f}+/-{f(r, 'sigma'):.2f}\n"
-                     f"misfit {f(r, 'misfit'):.3f}  chi2r {f(r, 'chi2_red'):.2f}  b {f(r, 'broad_kms'):.1f}  {short}",
-                     fontsize=7, color=color, loc="left")
+        fix = lambda k: "" if fitted[k] else " (fixed)"
+        ax.set_title(f"{n}. {lid}  A={f(r, 'A'):.2f}+/-{f(r, 'sigma'):.2f}  {short}\n"
+                     f"misfit {f(r, 'misfit'):.3f}  chi2r {f(r, 'chi2_red'):.2f}\n"
+                     f"RV {f(r, 'dv_kms'):+.2f}{fix('rv')}  b {f(r, 'broad_kms'):.2f}{fix('broad')}  "
+                     f"c {f(r, 'cont'):.3f}{fix('cont')}",
+                     fontsize=6.5, color=color, loc="left")
         if lid in marks:
             ax.text(0.02, 0.04, marks[lid], transform=ax.transAxes, fontsize=6.5, color="tab:blue",
                     va="bottom")
@@ -1408,9 +1485,11 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
         ax.axis("off")
     fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, red rejected "
                  "(quality cuts or by hand);  orange text: flagged by hand (still used);  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
-                 "bottom trace: obs - fit", fontsize=10,
-                 y=1 - 0.25 / (2.5 * nrows + head), va="top")
-    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.02, top=1 - head / (2.5 * nrows + head),
-                        wspace=0.18, hspace=0.55)
+                 "bottom trace: obs - fit\n"
+                 f"per panel: RV shift [km/s], b = extra broadening [km/s, faltbon {profile or 'FWHM'} argument], c = continuum "
+                 "factor; (fixed) = not fitted in this run", fontsize=10,
+                 y=1 - 0.25 / (row_h * nrows + head), va="top")
+    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.02, top=1 - head / (row_h * nrows + head),
+                        wspace=0.18, hspace=0.5)
     fig.savefig(path, dpi=120)
     plt.close(fig)
