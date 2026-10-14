@@ -101,7 +101,7 @@ def main() -> None:
     loader.exec_module(fsp)                                    # for make_atmosphere (the interpolator)
     # every model: key, legend label, colour, line width, linestyle, atmosphere, config (abundances), A(Fe)
     run_abu = float(summary["results"]["A1"])
-    models = [dict(key=0, label=f"Teff = {teff:.0f} K (Fe run)", colour="grey", lw=1.8, ls="-", cfg=cfg, abu=run_abu,
+    models = [dict(key=0, label=f"Teff = {teff:.0f} K (Fe run)", colour="black", lw=1.3, ls="-", cfg=cfg, abu=run_abu,
                    atm=AtmosphereSpec(atm=run_dir / "atm" / summary["atmosphere"],
                                       dc=run_dir / "atm" / summary["departure_coefficients"], feoh=feh,
                                       alpha_fe=parse_atm_name(summary["atmosphere"])["alpha_fe"], vmic=vmic,
@@ -141,11 +141,11 @@ def main() -> None:
         fig, (ax, rax) = plt.subplots(2, 1, figsize=(20, 9), sharex=True,
                                       gridspec_kw=dict(height_ratios=[3, 1.3], hspace=0.05))
         sel = np.abs(obs_wl - c) <= HALF_WIDTH
-        ax.plot(obs_wl[sel] - c, obs_fl[sel], ".", ms=2, color="black", label="observed")
+        ax.plot(obs_wl[sel] - c, obs_fl[sel], ".", ms=2, color="grey", label="observed")
         rax.axhline(0, color="0.3", lw=0.8)
         for m in models:
             wl, fl = synth[(name, m["key"])]
-            ax.plot(wl - c, fl, color=m["colour"], lw=m["lw"], ls=m["ls"], label=m["label"], alpha=1.0 if m["key"] == 0 else 0.6)
+            ax.plot(wl - c, fl, color=m["colour"], lw=m["lw"], ls=m["ls"], label=m["label"], alpha=1.0 if m["key"] == 0 else 0.7)
             rax.plot(obs_wl[sel] - c, obs_fl[sel] - np.interp(obs_wl[sel], wl, fl), color=m["colour"], ls=m["ls"],
                      lw=0.9 if m["key"] == 0 else 0.7, alpha=1.0 if m["key"] == 0 else 0.6)
         ax.set_title(f"{SELECTED_STAR}  {name}  ({c:.1f} Å)     Fe run: Teff={teff:.0f} logg={logg:.2f} "
