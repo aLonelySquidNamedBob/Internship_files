@@ -36,12 +36,17 @@ with line_list_file.open() as f:
 
 # stars = ["HD115444", "HD196944", "TIC396792499"]
 stars = list(config.keys())
-selected_star = stars[1]  # Change this to select a different star
+selected_star = stars[3]  # Change this to select a different star
 
 line = 5194.9414
 wmin = line - 10
 wmax = line + 10
-dw = 0.01  # wavelength step
+
+wmin = 3000
+wmax = 10000
+
+
+dw = 0.05  # wavelength step
 
 
 # Departure coefficients
@@ -49,8 +54,8 @@ elt         = config[selected_star]["synthesis"]["NLTE_element"]
 Z           = nlte_config["element"][elt]["atomic_number"]
 model_atom  = nlte_config["element"][elt]["model_atom"]
 atom_path   = Path(f"{nlte_config['element'][elt]['model_atom_path']}")
-dc_path     = home / f"{config[selected_star]['synthesis']['departure_coefficients_path']}"
-dc          = dc_path / config[selected_star]["synthesis"]["departure_coefficients"]
+dc_path     = home / f"{config[selected_star]['synthesis']['departure_coefficients']}"
+dc          = Path(config[selected_star]["synthesis"]["departure_coefficients"])
 
 
 # ['F']: LTE, ['T']: NLTE
@@ -70,9 +75,9 @@ copath.mkdir(parents=True, exist_ok=True)
 
 #dc = "p5777_g+4.4_m0.0_t01_st_z+0.00_a+0.00_c+0.00_n+0.00_o+0.00_r+0.00_s+0.00_Ba_2.27_dc.dat"
 vmic = 1.0
-feoh = -2.05
+feoh = -2.40
 aoh = +0.40
-Fe_abus = ["0"]
+Fe_abus = ["5.05"]
 
 # Linelists
 default_lls: list[Path] = line_list_config["master"]
@@ -117,7 +122,7 @@ nlte_ifn.write_text(
     "# path for model atom files\n"
     f"{atom_path}/\n"
     "# path for departure files\n"
-    f"{dc_path}/\n"
+    f"{dc.parent}/\n"
     f"{record}\n"
 )
 
