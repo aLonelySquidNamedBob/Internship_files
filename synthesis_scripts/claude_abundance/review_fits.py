@@ -8,6 +8,8 @@ Click through the line fits of one find_stellar_parameters run and keep, flag or
                                                   # picture, with the review decisions and current flags marked
                                                   # (for ssh sessions without X; flag lines by editing
                                                   # data/selected_lines/<star>/fe_line_flags.yaml)
+    python review_fits.py --region <line_id> <left> <right>   # no window: set the chi^2 limits (fit region, A)
+    python review_fits.py --region <line_id> clear            # of a line in the line CSV / back to the default
 
 Buttons, or keys:
     left / right   previous / next line
@@ -16,6 +18,9 @@ Buttons, or keys:
     1 2 3          flag with one of the preset REASONS
     r              reject with the reason in the text box -> written as "reject: <reason>", left out
     u              undo the decision for this line (restores the flag file entry as it was)
+    drag on plot   choose new chi^2 limits (fit region) for this line (blue band)
+    m              save the chosen limits to chi2_left / chi2_right in the line CSV (used from the next run on)
+    x              clear the limits of this line in the line CSV (back to the default window)
     q              quit
 Click in the text box to type a reason (Enter to finish); keys go to the text box while it is active.
 
@@ -25,6 +30,8 @@ Every decision is saved at once to
                                                        find_stellar_parameters marks the flagged lines and leaves
                                                        the ones whose reason starts with "reject" out
 "Keep" only lifts a manual entry: lines rejected by the automatic cuts (chi2, sigma clipping) stay rejected.
+Fit regions are written straight into the star's selected-lines CSV (chi2_left / chi2_right) and take effect in
+the next find_stellar_parameters run; the plot shows the run's region (dashed) and the one in the CSV (blue text).
 """
 
 from __future__ import annotations
@@ -38,13 +45,14 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
-from fe_line_fit import RUNS_DIR, is_reject, load_line_flags, load_lines, plot_overview, read_bestfit, save_line_flags, totals_text
+from fe_line_fit import (RUNS_DIR, is_reject, load_line_flags, load_lines, load_star_config, plot_overview,
+                         read_bestfit, save_line_flags, set_line_region, totals_text)
 
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD196944"
+SELECTED_STAR = "HD2454"
 RUN_DIR = None                       # None -> newest run in runs/<star>/fe_abundance/ (a command-line argument wins)
 REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1-3 (flag)
 
@@ -81,7 +89,7 @@ def num(r: dict, key: str) -> float:
 class Reviewer:
     def __init__(self, run: Path):
         import matplotlib.pyplot as plt
-        from matplotlib.widgets import Button, TextBox
+        from matplotlib.widgets import Button, SpanSelector, TextBox
 
         self.plt = plt
         self.run = run
@@ -89,7 +97,9 @@ class Reviewer:
         self.star = summary["star"]
         self.rows = sorted(read_rows(run), key=lambda r: num(r, "wavelength"))
         line_file = Path(summary["line_file"])
+        self.line_file = line_file
         self.windows = {r["line_id"]: (r["fit_left"], r["fit_right"]) for r in load_lines(line_file)}
+        self.pending: tuple[float, float] | None = None          # region dragged on the plot, not saved yet
         self.flags_path = line_file.with_name("fe_line_flags.yaml")
         self.flags0 = load_line_flags(self.flags_path)          # as they were before this session (for undo)
         self.review_path = run / "review.yaml"
@@ -99,13 +109,14 @@ class Reviewer:
 
         for key in [k for k in plt.rcParams if k.startswith("keymap.")]:  # free our keys from matplotlib's
             plt.rcParams[key] = [c for c in plt.rcParams[key]
-                                 if c not in ("k", "f", "r", "u", "q", "1", "2", "3", "left", "right")]
+                                 if c not in ("k", "f", "r", "u", "q", "m", "x", "1", "2", "3", "left", "right")]
 
         self.fig = plt.figure(figsize=(12, 7))
         self.fig.canvas.manager.set_window_title(f"review_fits: {run.name}")
         self.ax = self.fig.add_axes([0.07, 0.42, 0.90, 0.46])
         self.axr = self.fig.add_axes([0.07, 0.24, 0.90, 0.15], sharex=self.ax)
         self.status = self.fig.text(0.07, 0.905, "", fontsize=12, weight="bold")
+        self.region_text = self.fig.text(0.55, 0.905, "", fontsize=10, color="tab:blue")
         self.header = self.fig.text(0.07, 0.94, "", fontsize=10)
 
         self.box = TextBox(self.fig.add_axes([0.20, 0.13, 0.55, 0.05]), "reason ", initial=REASONS[0])
@@ -115,11 +126,15 @@ class Reviewer:
                              (0.37, "flag (f)", lambda _: self.flag(self.box.text)),
                              (0.52, "reject (r)", lambda _: self.reject(self.box.text)),
                              (0.67, "undo (u)", lambda _: self.undo()), (0.82, "next >", lambda _: self.move(1))):
-            b = Button(self.fig.add_axes([x, 0.04, 0.13, 0.06]), label)
+            b = Button(self.fig.add_axes([x, 0.02, 0.13, 0.05]), label)
             b.on_clicked(cb)
             self.buttons.append(b)
-        self.fig.text(0.20, 0.105, "keys 1-3 flag with: " +
+        self.fig.text(0.20, 0.108, "keys 1-3 flag with: " +
                       "   ".join(f"{n + 1}: {r}" for n, r in enumerate(REASONS)), fontsize=8, color="0.3")
+        self.fig.text(0.20, 0.083, "drag on the plot: new chi^2 limits   m: save them to the line CSV   "
+                      "x: clear them (default window)", fontsize=8, color="tab:blue")
+        self.span = SpanSelector(self.ax, self.on_span, "horizontal", useblit=True, interactive=True,
+                                 props=dict(alpha=0.15, facecolor="tab:blue"))
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
         self.draw()
 
@@ -167,6 +182,39 @@ class Reviewer:
 
     def move(self, step: int) -> None:
         self.i = (self.i + step) % len(self.rows)
+        self.pending = None
+        self.draw()
+
+    # --- fit regions (chi2_left / chi2_right in the line CSV) ------------------------------------
+
+    def on_span(self, xmin: float, xmax: float) -> None:
+        if xmax - xmin > 0.02:
+            self.pending = (round(float(xmin), 3), round(float(xmax), 3))
+            self.region_text.set_text(f"chosen region {xmin:.3f}..{xmax:.3f}  (press m to save)")
+            self.fig.canvas.draw_idle()
+
+    def csv_region(self, lid: str) -> tuple[float, float] | None:
+        row = next((r for r in load_lines(self.line_file) if r["line_id"] == lid), None)
+        return (row["chi2_left"], row["chi2_right"]) if row and row["chi2_left"] is not None else None
+
+    def save_region(self) -> None:
+        lid = self.rows[self.i]["line_id"]
+        if self.pending is None:
+            self.region_text.set_text("drag on the plot first to choose a region")
+        else:
+            try:
+                set_line_region(self.line_file, lid, *self.pending)
+            except ValueError as exc:
+                self.region_text.set_text(str(exc))
+            else:
+                self.pending = None
+                self.draw()
+                return
+        self.fig.canvas.draw_idle()
+
+    def clear_region(self) -> None:
+        set_line_region(self.line_file, self.rows[self.i]["line_id"], None, None)
+        self.pending = None
         self.draw()
 
     def on_key(self, event) -> None:
@@ -174,6 +222,7 @@ class Reviewer:
             return
         actions = {"left": lambda: self.move(-1), "right": lambda: self.move(1), "k": self.keep,
                    "f": lambda: self.flag(self.box.text), "r": lambda: self.reject(self.box.text), "u": self.undo,
+                   "m": self.save_region, "x": self.clear_region,
                    "q": lambda: self.plt.close(self.fig)}
         actions.update({str(n + 1): (lambda s=s: self.flag(s)) for n, s in enumerate(REASONS)})
         if event.key in actions:
@@ -237,6 +286,12 @@ class Reviewer:
         else:
             text, color = f"REJECTED: {d['reason']}", "tab:red"
             self.box.set_val(d["reason"])
+        reg = self.csv_region(lid)
+        self.region_text.set_text(f"region in line CSV: {reg[0]:.3f}..{reg[1]:.3f} (next run)" if reg
+                                  else "region in line CSV: default window")
+        if reg:
+            for a in (self.ax, self.axr):
+                a.axvspan(*reg, color="tab:blue", alpha=0.08, zorder=0)
         n_done = sum(1 for x in self.rows if x["line_id"] in self.review)
         self.status.set_text(f"{text}      ({n_done}/{len(self.rows)} reviewed)")
         self.status.set_color(color)
@@ -268,11 +323,31 @@ def write_overview(run: Path) -> Path:
                   title=f"{summary['star']} {mode}: Teff={summary['teff']:.0f} logg={summary['logg']:.2f} "
                         f"vmic={summary['vmic']:.2f} [Fe/H]={summary['feh_atmosphere']:+.2f}   ({run.name})"
                         + (f"\nnote: {summary['note']}" if summary.get("note") else ""),
-                  marks=marks, totals=totals_text(summary["results"]))
+                  marks=marks, totals=totals_text(summary["results"]), fit_settings=summary.get("fit_settings"))
     return path
 
 
+def set_region_cli(argv: list[str]) -> None:
+    """--region <line_id> <left> <right> | --region <line_id> clear"""
+    i = argv.index("--region")
+    args = argv[i + 1:]
+    if len(args) not in (2, 3) or (len(args) == 2 and args[1] != "clear"):
+        raise SystemExit("usage: review_fits.py --region <line_id> <left> <right>   or   --region <line_id> clear")
+    cfg = load_star_config(SELECTED_STAR)
+    lid = args[0]
+    if args[1] == "clear":
+        set_line_region(cfg.line_file, lid, None, None)
+        print(f"{lid}: fit region cleared (default window) in {cfg.line_file}")
+    else:
+        lo, hi = sorted((float(args[1]), float(args[2])))
+        set_line_region(cfg.line_file, lid, lo, hi)
+        print(f"{lid}: fit region {lo:.3f}..{hi:.3f} written to {cfg.line_file} (used from the next run on)")
+
+
 def main() -> None:
+    if "--region" in sys.argv:
+        set_region_cli(sys.argv)
+        return
     args = [a for a in sys.argv[1:] if a != "--overview"]
     run = Path(args[0]).expanduser() if args else (Path(RUN_DIR) if RUN_DIR else latest_run(SELECTED_STAR))
     if not (run / "lines.csv").exists() or not (run / "summary.yaml").exists():
