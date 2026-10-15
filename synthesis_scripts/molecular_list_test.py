@@ -43,8 +43,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))      # synthesis_scripts/, so claude_abundance/ is found
 from claude_abundance.fe_line_fit import (ATOMIC_NUMBER, BABSMA, BSYN, CONFIG_DIR, FALTBON, FALTBON_PROFILE,  # noqa: E402
-                         REFERENCE_ABUNDANCE_FILE, RUNS_DIR, SCRATCH_DIR, SOLAR_FE, SPHERICAL_RT, TS_DATA,
-                         individual_abundances, load_lines, load_spectrum, load_star_config, resolve_path,
+                         RUNS_DIR, SCRATCH_DIR, SOLAR_FE, SPHERICAL_RT, TS_DATA,
+                         individual_abundances, isotope_block, load_lines, load_spectrum, load_star_config, resolve_path,
                          run_program)
 
 # ---------------------------------------------------------------------------
@@ -88,14 +88,6 @@ def abundance_block(abund: dict[str, float]) -> str:
     """'INDIVIDUAL ABUNDANCES' block, absolute log eps (H = 12), sorted by atomic number."""
     pairs = sorted((ATOMIC_NUMBER[el], a) for el, a in abund.items())
     return f"'INDIVIDUAL ABUNDANCES:'   '{len(pairs)}'\n" + "".join(f"{z}  {a:.4f}\n" for z, a in pairs)
-
-
-def isotope_block(c12_c13: float | None) -> str:
-    """'ISOTOPES' block for the carbon isotopes (fractions of 12C and 13C), or '' for the solar mixture."""
-    if c12_c13 is None:
-        return ""
-    f13 = 1.0 / (1.0 + c12_c13)
-    return f"'ISOTOPES : ' '2'\n6.012 {1.0 - f13:.5f}\n6.013 {f13:.5f}\n"
 
 
 def babsma_input(atm: Path, opac: Path, feoh: float, alpha: float, vmic: float, abund: dict) -> str:
@@ -273,8 +265,7 @@ def main() -> None:
     vmic = VMIC if VMIC is not None else cfg.vmic
     abund = individual_abundances(cfg, feoh)
     abund["Fe"] = round(SOLAR_FE + feoh, 4)                  # Fe is not fitted here
-    ref_entry = (yaml.safe_load(REFERENCE_ABUNDANCE_FILE.read_text()) or {}).get(SELECTED_STAR) or {}
-    c12_c13 = (ref_entry.get("isotope_ratios") or {}).get("C12_C13") if USE_ISOTOPE_RATIOS else None
+    c12_c13 = cfg.c12_c13 if USE_ISOTOPE_RATIOS else None
     vmac = (cfg.raw.get("synthesis") or {}).get("vmac")
     extra = EXTRA_BROADENING if EXTRA_BROADENING is not None else (("radtan", float(vmac)) if vmac else None)
 
