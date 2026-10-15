@@ -134,7 +134,8 @@ TIC396792499:
     raw:
       - null
     normalized:
-      - null
+      - data/normalized_spectra/TIC396792499_coadd_normalised_resampled.csv
+      # - data/normalized_spectra/TIC396792499_coadd_normalised.ssv
     
   synthesis:
     model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"

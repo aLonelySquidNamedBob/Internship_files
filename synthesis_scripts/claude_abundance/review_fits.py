@@ -52,7 +52,7 @@ from fe_line_fit import (RUNS_DIR, is_reject, load_line_flags, load_lines, load_
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "TIC396792499"
 RUN_DIR = None                       # None -> newest run in runs/<star>/fe_abundance/ (a command-line argument wins)
 REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1-3 (flag)
 

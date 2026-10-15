@@ -61,13 +61,14 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "TIC396792499"
 
-TEFF = 6350                        # K
-LOGG = 3.80                          # dex (cgs)
-VMIC = 1.95                          # km/s
-FEH = -0.44                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+TEFF = 4760                          # K
+LOGG = 1.50                          # dex (cgs)
+VMIC = 1.35                          # km/s
+FEH = -1.95                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
+VMAC = 6.7
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
                                      # 0.0 = plane-parallel)
@@ -81,7 +82,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     broad_profile="gauss",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
                                      # the number) or "gauss" (profile 2, the number is the FWHM)
     fit_broadening=False,            # True: fit the extra broadening per line (0..broad_max); False: use the
-    broadening=12.5,                  # fixed value in km/s for every line (only used when fit_broadening=False)
+    broadening=VMAC,                  # fixed value in km/s for every line (only used when fit_broadening=False)
     broad_max=20.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
     rv_fixed=0.0,                    # shift for every line when fit_rv=False
@@ -90,7 +91,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     max_misfit=0.07,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
                                      # fraction of the line depth; `misfit` in lines.csv) is larger; None = no cut
     chi2_factor=None,                # optional old cut chi2_red > max(chi2_factor x median, 1); it punishes deep lines
-    fit_continuum=False,              # True: also fit a local continuum scale per line (weak prior around 1)
+    fit_continuum=True,              # True: also fit a local continuum scale per line (weak prior around 1)
     fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
