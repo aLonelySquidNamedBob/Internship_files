@@ -516,6 +516,10 @@ class FitSettings:
     keep_files: bool = False       # keep all Turbospectrum scratch files of every line (incl. ~100 MB of log)
     make_plots: bool = True
     # line selection used by analyze()
+    min_ep: float | None = 1.4     # drop lines with excitation potential < this [eV] (Fe I and Fe II; None or 0 = no
+                                   # cut). Low-EP Fe I lines carry the largest 1D LTE (3D/NLTE) errors in metal-poor
+                                   # giants, and with their lever arm in the A-EP slope they bias Teff. Applied after
+                                   # the fit, so the lines are still fitted and shown (as rejected) in the plots
     max_misfit: float | None = 0.07  # drop lines whose misfit > this (None = no cut). misfit = sqrt(rms_resid^2 -
                                    # noise^2) / line_depth: the systematic rms residual in the fit region, beyond
                                    # the noise, as a fraction of the line depth. Unlike chi2 it does not punish
@@ -1214,21 +1218,25 @@ def fill_misfit(rows: list[dict]) -> None:
 
 def quality_reasons(rows: list[dict], s: FitSettings, flags: dict[str, str] | None = None) -> list[str]:
     """Why each line is left out of the summary before sigma clipping ("" = candidate).
-    A manual reject (flag reason starting with "reject") wins over everything else; then failed fits, unbracketed
-    chi^2 minima, the misfit cut and (if set) the old chi^2 cut. Other flags are notes only."""
+    A manual reject (flag reason starting with "reject") wins over everything else; then the excitation potential
+    cut (min_ep), failed fits, unbracketed chi^2 minima, the misfit cut and (if set) the old chi^2 cut. Other flags
+    are notes only."""
     rejects = {k: v for k, v in (flags or {}).items() if is_reject(v)}
     fill_misfit(rows)
     chi = col(rows, "chi2_red")
     fitted = np.array([r["status"] == "ok" and not r["at_boundary"] and np.isfinite(r["A"]) and np.isfinite(r["sigma"])
                        for r in rows])
-    not_rejected = np.array([r["line_id"] not in rejects for r in rows])
+    low_ep = np.array([bool(s.min_ep) and r["ep"] < s.min_ep for r in rows])
+    not_rejected = np.array([r["line_id"] not in rejects for r in rows]) & ~low_ep
     base = fitted & not_rejected
     cut = max(s.chi2_factor * np.median(chi[base]), 1.0) if (s.chi2_factor and base.any()) else np.inf
     out = []
-    for r, c in zip(rows, chi):
+    for r, c, low in zip(rows, chi, low_ep):
         if r["line_id"] in rejects:
             why = re.sub(r"^\s*reject(ed)?\s*[:\-]?\s*", "", rejects[r["line_id"]], flags=re.I) or "no reason given"
             out.append(f"rejected: by hand ({why})")
+        elif low:
+            out.append(f"rejected: EP {r['ep']:.2f} eV < min_ep {s.min_ep:g} eV")
         elif r["status"] != "ok":
             out.append(f"rejected: {r['status']}")
         elif r["at_boundary"] or not (np.isfinite(r["A"]) and np.isfinite(r["sigma"])):

@@ -91,6 +91,8 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     max_misfit=0.07,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
                                      # fraction of the line depth; `misfit` in lines.csv) is larger; None = no cut
     chi2_factor=None,                # optional old cut chi2_red > max(chi2_factor x median, 1); it punishes deep lines
+    min_ep=1.4,                      # reject lines (Fe I and Fe II) with excitation potential < this [eV]; None or 0 =
+                                     # no cut. They are still fitted and shown as rejected in the plots
     fit_continuum=True,              # True: also fit a local continuum scale per line (weak prior around 1)
     fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
