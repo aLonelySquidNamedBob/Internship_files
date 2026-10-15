@@ -83,6 +83,7 @@ def main() -> None:
     cfg = load_star_config(SELECTED_STAR)
     cfg.reference_abundances, cfg.reference_notes, cfg.reference_scaling = {}, {}, "absolute"
     cfg.abundance_overrides = dict(summary["individual_abundances"])         # the abundances of the Fe run
+    cfg.c12_c13 = summary.get("c12_c13")                                     # and its 12C/13C (older runs: solar)
 
     # RV: median shift of the Fe lines used in the run (observed wavelengths / (1 + dv/c), as in the line fits)
     import csv

@@ -109,6 +109,8 @@ ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None 
     # "Ba": 1.19,                    # e.g. HD196944: the [Ba/Fe] = [Ce/Fe] value instead of the 3D NLTE 1.15
     # "N": None,
 }
+USE_ISOTOPE_RATIOS = True            # 12C/13C from `isotope_ratios: C12_C13` in the reference file (bsyn ISOTOPES);
+                                     # False, USE_REFERENCE_ABUNDANCES = False or no ratio given: solar mix (~89)
 KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
 
 # Line flags (line_id: reason; reason "reject..." = left out, anything else = marked only) are read from this
@@ -202,7 +204,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
         atmosphere=atm.atm.name, departure_coefficients=atm.dc.name, A_Fe_departure_coefficients=abund,
         manual_fit_regions={r["line_id"]: [r["chi2_left"], r["chi2_right"]] for r in rows
                             if r["region_source"] == "manual"},
-        abu_c=cfg.abu_c, solar_abundance_scale="asp2007 (Turbospectrum default)",
+        abu_c=cfg.abu_c, c12_c13=cfg.c12_c13, solar_abundance_scale="asp2007 (Turbospectrum default)",
         reference_scaling=cfg.reference_scaling if cfg.reference_abundances else None,
         abundance_overrides=dict(cfg.abundance_overrides),
         individual_abundances=individual_abundances(cfg, atm.feoh),     # everything but the fitted element
@@ -238,8 +240,11 @@ def main() -> None:
         print(f"note: no `spectra: snr:` for {SELECTED_STAR} in stars.yaml, using SNR = {cfg.snr:g}")
     if not USE_REFERENCE_ABUNDANCES:
         cfg.reference_abundances, cfg.reference_notes = {}, {}
+    if not (USE_REFERENCE_ABUNDANCES and USE_ISOTOPE_RATIOS):
+        cfg.c12_c13 = None
     cfg.reference_scaling = REFERENCE_SCALING
     cfg.abundance_overrides = dict(ABUNDANCE_OVERRIDES)
+    print(f"12C/13C: {cfg.c12_c13 if cfg.c12_c13 is not None else 'solar'}")
     if cfg.element in ABUNDANCE_OVERRIDES:
         print(f"note: ABUNDANCE_OVERRIDES[{cfg.element!r}] is ignored: {cfg.element} is the fitted element")
     print(f"individual abundances (everything else scaled solar for [Fe/H] = {FEH:+.2f}, {cfg.element} fitted):")

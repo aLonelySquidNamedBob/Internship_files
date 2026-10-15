@@ -140,6 +140,7 @@ class StarConfig:
     reference_abundances: dict = field(default_factory=dict)  # element -> A(X) from reference_abundance.yaml
     reference_notes: dict = field(default_factory=dict)       # element -> `note` of that entry
     reference_scaling: str = "absolute"                       # "absolute" or "fe"
+    c12_c13: float | None = None                              # 12C/13C (isotope_ratios: C12_C13); None: solar mix
     abundance_overrides: dict = field(default_factory=dict)   # element -> A(X), or None = scaled solar
 
 
@@ -165,6 +166,30 @@ def load_reference_abundances(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) 
         if v.get("note"):
             notes[el] = str(v["note"])
     return values, notes
+
+
+def load_c12_c13(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) -> float | None:
+    """12C/13C of one star (`isotope_ratios: C12_C13` in the reference-abundance file), or None if not given."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    entry = (_load_yaml(path) or {}).get(star) or {}
+    ratio = (entry.get("isotope_ratios") or {}).get("C12_C13")
+    if ratio is None:
+        return None
+    if float(ratio) <= 0:
+        raise ValueError(f"{path}: C12_C13 must be positive for {star}, not {ratio!r}")
+    return float(ratio)
+
+
+def isotope_block(c12_c13: float | None) -> str:
+    """bsyn 'ISOTOPES' block for the carbon isotopes (fractions of 12C and 13C), or '' for Turbospectrum's solar
+    mixture (12C/13C ~ 89). It sets the 12CH/13CH, 12C12C/12C13C/13C13C, 12CN/13CN ... strengths of the molecular
+    line lists; atomic C lines are not affected."""
+    if c12_c13 is None:
+        return ""
+    f13 = 1.0 / (1.0 + c12_c13)
+    return f"'ISOTOPES : ' '2'\n6.012 {1.0 - f13:.5f}\n6.013 {f13:.5f}\n"
 
 
 def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
@@ -248,6 +273,7 @@ def load_star_config(star: str) -> StarConfig:
         nlte_abundance=float(syn["NLTE_abundance"]) if syn.get("NLTE_abundance") is not None else None,
         reference_abundances=ref_values,
         reference_notes=ref_notes,
+        c12_c13=load_c12_c13(star),
     )
 
 
@@ -348,7 +374,7 @@ class LineSynth:
 'HELIUM     :'    '0.00'
 'R-PROCESS  :'    '0.00'
 'S-PROCESS  :'    '0.00'
-{self._individual_abundances(abu)}'NFILES   :' '{len(c.linelists)}'
+{self._individual_abundances(abu)}{isotope_block(c.c12_c13)}'NFILES   :' '{len(c.linelists)}'
 """ + "\n".join(str(p) for p in c.linelists) + f"""
 'SPHERICAL:'  '{"T" if SPHERICAL_RT else "F"}'
   30
