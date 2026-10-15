@@ -78,7 +78,9 @@ HD2454:
     raw:
       - "data/observed_spectra/HD2454/2454_all.coadd"
     normalized:
-      - "data/normalized_spectra/HD2454_normalised.coadd.csv"
+      # - "data/normalized_spectra/2454_halpha_norm.coadd.csv"
+      # - "data/normalized_spectra/HD2454_normalised.coadd.csv"
+      - "data/normalized_spectra/HD2454_all_normalized_spliced_clean.csv"
     
   synthesis:
     model_atmosphere: "data/interpolated/HD2454/p6565_g+4.1_m0.0_t01_st_z-0.21_a+0.08_c+0.00_n+0.00_o+0.08_r+0.00_s+0.00.int"
@@ -93,7 +95,10 @@ HD2454:
     abu_c: 8.21
     vmic: null # default is 1
 
-    molecular_line_lists: null
+    molecular_line_lists: 
+      - "CH"
+      - "CC"
+      - "CN"
 
   notes: null
   
