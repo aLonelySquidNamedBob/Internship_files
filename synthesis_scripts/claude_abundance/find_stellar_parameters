@@ -107,7 +107,7 @@ USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELEC
 REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
                                      # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.45; the solar value cancels)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
-                                     # reference file and abu_c in stars.yaml.
+                                     # reference file.
     # "Ba": 1.19,                    # e.g. HD196944: the [Ba/Fe] = [Ce/Fe] value instead of the 3D NLTE 1.15
     # "N": None,
 }
@@ -206,7 +206,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
         atmosphere=atm.atm.name, departure_coefficients=atm.dc.name, A_Fe_departure_coefficients=abund,
         manual_fit_regions={r["line_id"]: [r["chi2_left"], r["chi2_right"]] for r in rows
                             if r["region_source"] == "manual"},
-        abu_c=cfg.abu_c, c12_c13=cfg.c12_c13, solar_abundance_scale="asp2007 (Turbospectrum default)",
+        c12_c13=cfg.c12_c13, solar_abundance_scale="asp2007 (Turbospectrum default)",
         reference_scaling=cfg.reference_scaling if cfg.reference_abundances else None,
         abundance_overrides=dict(cfg.abundance_overrides),
         individual_abundances=individual_abundances(cfg, atm.feoh),     # everything but the fitted element

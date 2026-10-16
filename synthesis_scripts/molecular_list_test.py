@@ -9,11 +9,11 @@ absorption the group adds. Groups whose absorption exceeds IMPACT_THRESHOLD are 
 Run it as a plain script: edit the settings below, then `python molecular_list_test.py`.
 
 Everything is taken from the config files:
-    stars.yaml               atmosphere + departure coefficients, metallicity, alpha/Fe, vmic, abu_c, spectrum,
+    stars.yaml               atmosphere + departure coefficients, metallicity, alpha/Fe, vmic, spectrum,
                              instrument_fwhm (default -3 km/s), vmac (rad-tan, optional)
     line_lists.yaml          the master lists (always included) and the molecular groups that are tested
     reference_abundance.yaml A(X) of the other elements (C, N, O drive the molecules) and isotope_ratios: C12_C13
-Abundances are assembled exactly as in claude_abundance/fe_line_fit.py (reference file, REFERENCE_SCALING, abu_c,
+Abundances are assembled exactly as in claude_abundance/fe_line_fit.py (reference file, REFERENCE_SCALING,
 ABUNDANCE_OVERRIDES); A(Fe) = 7.45 + metallicity (Turbospectrum / MARCS solar scale).
 
 Output in runs/<star>/molecular_tests/<wmin>-<wmax>_<time>/ :
