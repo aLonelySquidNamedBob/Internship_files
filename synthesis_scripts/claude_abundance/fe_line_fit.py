@@ -133,7 +133,6 @@ class StarConfig:
     yaml_dc: Path | None
     feoh: float | None
     alpha_fe: float | None
-    abu_c: float | None            # absolute A(C) = log eps(C), H = 12; None: scaled solar
     vmic: float
     nlte_abundance: float | None
     # abundances of the other elements, see individual_abundances()
@@ -199,9 +198,9 @@ def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
       1. cfg.reference_abundances (reference_abundance.yaml), with cfg.reference_scaling
            "absolute": A(X) as published,
            "fe":       A(X) shifted by feoh - [Fe/H]_reference, i.e. the published [X/Fe] is kept;
-         Fe itself is never taken from there: it follows the model metallicity,
-      2. abu_c from stars.yaml (C),
-      3. cfg.abundance_overrides: a value, or None to put the element back to scaled solar.
+         Fe itself is never taken from there: it follows the model metallicity. C is treated like every other
+         element (there is no separate C setting in stars.yaml),
+      2. cfg.abundance_overrides: a value, or None to put the element back to scaled solar.
     The fitted element (cfg.element) is always left out: LineSynth adds its trial value."""
     ref = dict(cfg.reference_abundances)
     if cfg.reference_scaling == "fe" and ref:
@@ -212,8 +211,6 @@ def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
     elif cfg.reference_scaling not in ("absolute", "fe"):
         raise ValueError(f"reference_scaling must be 'absolute' or 'fe', not {cfg.reference_scaling!r}")
     ref.pop("Fe", None)
-    if cfg.abu_c is not None:
-        ref["C"] = cfg.abu_c
     for el, a in cfg.abundance_overrides.items():
         if el not in ATOMIC_NUMBER:
             raise ValueError(f"abundance override for unknown element {el!r}")
@@ -233,6 +230,9 @@ def load_star_config(star: str) -> StarConfig:
     s = stars[star]
     syn = s["synthesis"]
     spectra = s.get("spectra") or {}
+    if syn.get("abu_c") is not None:
+        raise ValueError(f"{star}: `abu_c` in stars.yaml is no longer read; put C in reference_abundance.yaml "
+                         "(or use ABUNDANCE_OVERRIDES) and remove abu_c")
 
     nlte_cfg = _load_yaml(CONFIG_DIR / "nlte.yaml")
     ll_cfg = _load_yaml(CONFIG_DIR / "line_lists.yaml")
@@ -268,7 +268,6 @@ def load_star_config(star: str) -> StarConfig:
         yaml_dc=(HOME / dc_dir / dc if dc_dir else HOME / dc) if dc else None,
         feoh=float(syn["metallicity"]) if syn.get("metallicity") is not None else parsed.get("feoh"),
         alpha_fe=float(syn["alpha_fe"]) if syn.get("alpha_fe") is not None else parsed.get("alpha_fe"),
-        abu_c=float(syn["abu_c"]) if syn.get("abu_c") is not None else None,    # None: scaled solar
         vmic=float(syn.get("vmic") or DEFAULT_VMIC),
         nlte_abundance=float(syn["NLTE_abundance"]) if syn.get("NLTE_abundance") is not None else None,
         reference_abundances=ref_values,
@@ -331,7 +330,7 @@ class LineSynth:
     def _individual_abundances(self, fe: float | None = None) -> str:
         """The 'INDIVIDUAL ABUNDANCES' block (absolute log eps, H = 12) shared by babsma and bsyn: the fitted
         element (the trial value, bsyn only) and every element of individual_abundances() (reference file,
-        abu_c, overrides; both, so that the continuous opacity and molecular equilibrium of babsma agree with the
+        overrides; both, so that the continuous opacity and molecular equilibrium of babsma agree with the
         line synthesis). Elements that are not listed are left at the scaled-solar value."""
         pairs = [(ATOMIC_NUMBER[el], a) for el, a in self.abundances.items()]
         if fe is not None:
