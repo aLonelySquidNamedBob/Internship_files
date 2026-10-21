@@ -8,8 +8,8 @@
 # nlte: true marks values the paper says include non-LTE corrections (Fe, Eu).
 # Check of the two parts: A(X) - [X/Fe] - [Fe/H] gives back the Grevesse et al. (2007) solar value to
 # 0.01 dex everywhere, except C of HD115444 (8.45 instead of 8.39), N of HE22081239 (7.49 instead of 7.78:
-# A(N) = 7.50 vs [N/Fe] = 2.41 at [Fe/H] = -2.40) and Zr (2.58-2.62). The [X/Fe] cells were re-checked on the photo;
-# either the A(X) of these cells were misread or the paper is inconsistent; see SOLAR_GAS07
+# A(N) = 7.50 vs [N/Fe] = 2.41 at [Fe/H] = -2.40) and Zr (2.58-2.62). Both parts were re-checked on a photo of
+# the full table (2026-10-21): these cells are printed that way, so the inconsistency is in the paper; see SOLAR_GAS07
 # in synthesis_scripts/claude_abundance/fe_line_fit.py.
 # Top-level keys match config/stars.yaml.
 
