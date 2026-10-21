@@ -29,7 +29,8 @@ Everything goes to  ~/NICO/runs/<star>/fe_abundance/T<teff>_g<logg>_v<vmic>_z<fe
     fe_line_flags.yaml   copy of the flags used
     diagnostics.png      A(Fe) against EP, REW and wavelength
     overview.png         all line fits in one picture, numbered and coloured by selection
-    lines/<line>/        fit.png and bestfit.csv per line; synth/ holds the synthetic spectrum of every trial
+    lines/<line>/        fit.png and bestfit.csv per line (with the A(Fe) -/+ abund_band_offset syntheses as a shaded band
+                         when abund_band is on); synth/ holds the synthetic spectrum of every trial
                          abundance (.spec from bsyn, .cvl after the instrumental profile) and chi2_curve.csv the
                          chi^2, RV shift, broadening and continuum fitted at each of them
     atm/                 the interpolated atmosphere and departure coefficients
@@ -99,6 +100,10 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
     a_tol=0.001,
     a_local=0.05,                    # the final parabola must use points within this of the best one [dex]
+  
+    abund_band=True,                 # also synthesise every line at best-fit A(Fe) -/+ abund_band_offset (2 extra bsyn
+    abund_band_offset=0.2,           # runs per line) and shade the region between them in fit.png / overview.png [dex]
+  
     assign_nlte_levels=False         # DO NOT INVENT NLTE LEVELS.
 )
 # Abundances of the other elements (blends, molecules, electron donors), given to babsma and bsyn as INDIVIDUAL
