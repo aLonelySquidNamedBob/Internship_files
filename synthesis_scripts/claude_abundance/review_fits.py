@@ -237,7 +237,7 @@ class Reviewer:
         self.axr.clear()
         fit = self.run / "lines" / lid / "bestfit.csv"
         if fit.exists():
-            wl, obs, mod, used, nofe = read_bestfit(fit)
+            wl, obs, mod, used, nofe, band, band_off = read_bestfit(fit)
             left, right = self.windows.get(lid, (np.nan, np.nan))
             for a in (self.ax, self.axr):
                 a.axvspan(left, right, color="0.92", zorder=0)
@@ -248,6 +248,9 @@ class Reviewer:
             self.ax.plot(wl[used], obs[used], "k.", ms=3, label="observed")
             if (~used).any():
                 self.ax.plot(wl[~used], obs[~used], ".", color="0.7", ms=3, label="not in the fit")
+            if np.isfinite(band).any():
+                self.ax.fill_between(wl, band[0], band[1], color="tab:red", alpha=0.2, lw=0, zorder=1,
+                                     label=f"A(Fe) +/- {band_off:g}")
             self.ax.plot(wl, mod, "r-", lw=1.2, label="best fit")
             if np.isfinite(nofe).any():
                 self.ax.plot(wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
@@ -255,7 +258,7 @@ class Reviewer:
             self.axr.plot(wl[used], (obs - mod)[used], "k.", ms=2)
             self.axr.plot(wl[~used], (obs - mod)[~used], ".", color="0.7", ms=2)
             self.axr.axhline(0, color="r", lw=0.8)
-            lo, hi = min(obs.min(), mod.min()), max(obs.max(), mod.max())
+            lo, hi = min(obs.min(), mod.min(), np.nanmin(band, initial=np.inf)), max(obs.max(), mod.max())
             self.ax.set_ylim(lo - 0.05 * (hi - lo) - 0.005, hi + 0.05 * (hi - lo) + 0.005)
             self.ax.set_xlim(wl.min(), wl.max())
         else:
