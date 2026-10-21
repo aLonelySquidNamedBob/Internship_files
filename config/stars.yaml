@@ -134,8 +134,8 @@ TIC396792499:
       # - data/normalized_spectra/TIC396792499_coadd_normalised.ssv
     
   synthesis:
-    model_atmosphere: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
-    departure_coefficients: "data/interpolated/TIC396792499/s4859_g+1.5_m1.0_t02_st_z-2.05_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.40_dc.dat"
+    model_atmosphere: "data/interpolated/TIC396792499/derived/s4670_g+1.2_m1.0_t02_st_z-2.21_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
+    departure_coefficients: "data/interpolated/TIC396792499/derived/s4670_g+1.2_m1.0_t02_st_z-2.21_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00_Fe_5.25_dc.dat"
     interpolated: true
 
     NLTE_element: "Fe"
@@ -152,7 +152,34 @@ TIC396792499:
       - "OH"
       - "MgH"
       - "SiH"
-      - "TiO"
+      # - "TiO"
       - "CaH"
 
   notes: "Several alternative or backup reductions are available."
+
+SUN:
+  name: "Sun"
+  spectra:
+    normalized:
+      - "data/normalized_spectra/HARPS_Sun_normalized.csv"
+
+  synthesis:
+    model_atmosphere: null
+    departure_coefficients: null
+    interpolated: null
+
+    NLTE_element: "Fe"
+    NLTE_abundance: 7.46
+
+    metallicity: 0
+    alpha_fe: 0.40
+    vmic: null
+
+    molecular_line_lists: 
+      - "CC"
+      - "CN"
+      - "CH"
+      - "OH"
+      - "MgH"
+      - "SiH"
+      - "CaH"
