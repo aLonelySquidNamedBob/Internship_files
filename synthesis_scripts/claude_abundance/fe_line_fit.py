@@ -1176,6 +1176,7 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
     try:
         with ProcessPoolExecutor(max_workers=s.n_jobs, mp_context=multiprocessing.get_context("fork")) as ex:
             futures = [ex.submit(fit_one_line, j) for j in jobs]
+            print(f"    [0/{len(jobs)}] lines done ({time.time() - t0:.0f} s)", flush=True)
             for i, fut in enumerate(as_completed(futures), 1):
                 r = fut.result()
                 results.append(r)
