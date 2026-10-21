@@ -111,7 +111,8 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
 # [alpha/Fe]); Fe follows FEH; the fitted element (Fe) always gets its trial value, whatever is set here.
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
 REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
-                                     # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.45; the solar value cancels)
+                                     # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.45; the solar value cancels);
+                                     # "xfe": A(X) = A(X)_sun (Grevesse 2007) + FEH + the published [X/Fe] (relative_abundances)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
                                      # reference file.
     # "Ba": 1.19,                    # e.g. HD196944: the [Ba/Fe] = [Ce/Fe] value instead of the 3D NLTE 1.15
@@ -249,7 +250,7 @@ def main() -> None:
     if (cfg.raw.get("spectra") or {}).get("snr") is None:
         print(f"note: no `spectra: snr:` for {SELECTED_STAR} in stars.yaml, using SNR = {cfg.snr:g}")
     if not USE_REFERENCE_ABUNDANCES:
-        cfg.reference_abundances, cfg.reference_notes = {}, {}
+        cfg.reference_abundances, cfg.reference_notes, cfg.relative_abundances = {}, {}, {}
     if not (USE_REFERENCE_ABUNDANCES and USE_ISOTOPE_RATIOS):
         cfg.c12_c13 = None
     cfg.reference_scaling = REFERENCE_SCALING

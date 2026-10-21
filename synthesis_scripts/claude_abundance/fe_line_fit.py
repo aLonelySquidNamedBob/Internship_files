@@ -85,6 +85,12 @@ C_KMS = 299792.458
 FALTBON_PROFILE = {"gauss": 2, "radtan": 3}   # faltbon profile types of the extra broadening
 MIN_BROAD_KMS = 0.1      # below this the extra broadening is skipped (kernel narrower than a pixel)
 REFERENCE_ABUNDANCE_FILE = CONFIG_DIR / "reference_abundance.yaml"   # published A(X) per star (keys as stars.yaml)
+SOLAR_GAS07 = {          # Grevesse, Asplund & Sauval (2007) solar A(X): the scale of the published [X/Fe] (checked: A(X) -
+    "C": 8.39, "N": 7.78, "O": 8.66, "Mg": 7.53, "Si": 7.51, "Fe": 7.45,      # [X/Fe] - [Fe/H] of the reference file
+    "Sr": 2.92, "Y": 2.21, "Zr": 2.58, "Ba": 2.17, "La": 1.13, "Ce": 1.70,     # gives these back) and of Turbospectrum's
+    "Pr": 0.58, "Nd": 1.45, "Sm": 1.00, "Eu": 0.52, "Gd": 1.11, "Dy": 1.14,    # 'asp2007'
+    "Er": 0.93, "Hf": 0.88, "Pb": 2.00,
+}
 
 ELEMENTS = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr "
             "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb "
@@ -138,7 +144,8 @@ class StarConfig:
     # abundances of the other elements, see individual_abundances()
     reference_abundances: dict = field(default_factory=dict)  # element -> A(X) from reference_abundance.yaml
     reference_notes: dict = field(default_factory=dict)       # element -> `note` of that entry
-    reference_scaling: str = "absolute"                       # "absolute" or "fe"
+    relative_abundances: dict = field(default_factory=dict)   # element -> [X/Fe] (relative_abundances in that file)
+    reference_scaling: str = "absolute"                       # "absolute", "fe" or "xfe"
     c12_c13: float | None = None                              # 12C/13C (isotope_ratios: C12_C13); None: solar mix
     abundance_overrides: dict = field(default_factory=dict)   # element -> A(X), or None = scaled solar
 
@@ -165,6 +172,23 @@ def load_reference_abundances(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) 
         if v.get("note"):
             notes[el] = str(v["note"])
     return values, notes
+
+
+def load_relative_abundances(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) -> dict:
+    """element -> published [X/Fe] of one star (`relative_abundances` in the reference-abundance file). Null entries
+    are left out; a missing file, star or block gives {}."""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    entry = (_load_yaml(path) or {}).get(star) or {}
+    values = {}
+    for el, v in (entry.get("relative_abundances") or {}).items():
+        if el not in SOLAR_GAS07:
+            raise ValueError(f"{path}: no solar A({el}) in SOLAR_GAS07 for [{el}/Fe] of {star}")
+        if v is None or v.get("value") is None:
+            continue
+        values[el] = float(v["value"])
+    return values
 
 
 def load_c12_c13(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) -> float | None:
@@ -198,18 +222,24 @@ def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
       1. cfg.reference_abundances (reference_abundance.yaml), with cfg.reference_scaling
            "absolute": A(X) as published,
            "fe":       A(X) shifted by feoh - [Fe/H]_reference, i.e. the published [X/Fe] is kept;
+           "xfe":      A(X) = A(X)_sun (SOLAR_GAS07) + feoh + [X/Fe], from the published [X/Fe] themselves
+                       (cfg.relative_abundances); an element with an A(X) but no [X/Fe] (Ba) is taken as in "fe";
          Fe itself is never taken from there: it follows the model metallicity. C is treated like every other
          element (there is no separate C setting in stars.yaml),
       2. cfg.abundance_overrides: a value, or None to put the element back to scaled solar.
     The fitted element (cfg.element) is always left out: LineSynth adds its trial value."""
     ref = dict(cfg.reference_abundances)
-    if cfg.reference_scaling == "fe" and ref:
+    if cfg.reference_scaling in ("fe", "xfe") and ref:
         if "Fe" not in ref:
-            raise ValueError(f"{cfg.star}: reference_scaling 'fe' needs a reference A(Fe)")
+            raise ValueError(f"{cfg.star}: reference_scaling {cfg.reference_scaling!r} needs a reference A(Fe)")
         shift = feoh - (ref["Fe"] - SOLAR_FE)
         ref = {el: a + shift for el, a in ref.items()}
-    elif cfg.reference_scaling not in ("absolute", "fe"):
-        raise ValueError(f"reference_scaling must be 'absolute' or 'fe', not {cfg.reference_scaling!r}")
+    elif cfg.reference_scaling not in ("absolute", "fe", "xfe"):
+        raise ValueError(f"reference_scaling must be 'absolute', 'fe' or 'xfe', not {cfg.reference_scaling!r}")
+    if cfg.reference_scaling == "xfe":
+        if ref and not cfg.relative_abundances:
+            raise ValueError(f"{cfg.star}: reference_scaling 'xfe' needs relative_abundances in the reference file")
+        ref |= {el: SOLAR_GAS07[el] + feoh + xfe for el, xfe in cfg.relative_abundances.items()}
     ref.pop("Fe", None)
     for el, a in cfg.abundance_overrides.items():
         if el not in ATOMIC_NUMBER:
@@ -272,6 +302,7 @@ def load_star_config(star: str) -> StarConfig:
         nlte_abundance=float(syn["NLTE_abundance"]) if syn.get("NLTE_abundance") is not None else None,
         reference_abundances=ref_values,
         reference_notes=ref_notes,
+        relative_abundances=load_relative_abundances(star),
         c12_c13=load_c12_c13(star),
     )
 
