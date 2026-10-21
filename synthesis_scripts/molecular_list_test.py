@@ -65,7 +65,8 @@ LINE_WINDOW = 0.4                    # A: half-width of the Fe line windows chec
 
 # Abundances of the other elements, as in find_stellar_parameters
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
-REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe]
+REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe];
+                                     # "xfe": A(X)_sun (Grevesse 2007) + metallicity + published [X/Fe] (relative_abundances)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar
     # "N": 7.5,
 }
@@ -258,7 +259,7 @@ def main() -> None:
         raise SystemExit(f"{SELECTED_STAR}: stars.yaml needs model_atmosphere, departure_coefficients, metallicity "
                          "and alpha_fe")
     if not USE_REFERENCE_ABUNDANCES:
-        cfg.reference_abundances, cfg.reference_notes = {}, {}
+        cfg.reference_abundances, cfg.reference_notes, cfg.relative_abundances = {}, {}, {}
     cfg.reference_scaling = REFERENCE_SCALING
     cfg.abundance_overrides = dict(ABUNDANCE_OVERRIDES)
     feoh, alpha = cfg.feoh, cfg.alpha_fe
