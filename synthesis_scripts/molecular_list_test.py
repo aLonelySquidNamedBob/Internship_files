@@ -4,7 +4,9 @@ Which molecular line lists matter for a star? One Turbospectrum synthesis withou
 reference) and one per molecule group of config/line_lists.yaml (CC, CN, CH, ...: all isotopologue files of the
 group together), all with the star's atmosphere and abundances. The difference with the reference is the
 absorption the group adds. Groups whose absorption exceeds IMPACT_THRESHOLD are recommended for
-`molecular_line_lists` in config/stars.yaml.
+`molecular_line_lists` in config/stars.yaml. One more synthesis, `all_molecules`, has the master lists plus every
+molecular file of the tested groups at once (the "full" spectrum); it is reported next to the groups but is not
+part of the recommendation.
 
 Run it as a plain script: edit the settings below, then `python molecular_list_test.py`.
 
@@ -19,7 +21,8 @@ ABUNDANCE_OVERRIDES); A(Fe) = 7.45 + metallicity (Turbospectrum / MARCS solar sc
 Output in runs/<star>/molecular_tests/<wmin>-<wmax>_<time>/ :
     summary.csv / summary.yaml   per group: deepest added absorption, absorption added (mA), A of spectrum
                                  affected, strongest wavelength, effect on the Fe line windows; recommendation
-    spectra/<group>.cvl          the syntheses (after the instrumental profile)
+    spectra/<group>.cvl          the syntheses (after the instrumental profile); reference.cvl = master lists only,
+                                 all_molecules.cvl = master + all molecular files
     plots/<group>.png            added absorption over the whole range + zoom on the strongest feature
                                  (with the observed spectrum when there is one)
     plots/impact_overview.png    all groups side by side
@@ -51,7 +54,7 @@ from claude_abundance.fe_line_fit import (ATOMIC_NUMBER, BABSMA, BSYN, CONFIG_DI
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "HE22081239"
 
 WMIN, WMAX = 3800.0, 9000.0          # A
 DW = 0.02                            # synthesis step [A]
@@ -59,25 +62,27 @@ NLTE = "T"                           # "T": Fe in NLTE with the departure coeffi
 VMIC = None                          # km/s; None -> `vmic` in stars.yaml (default 1.0)
 
 GROUPS = None                        # None: every group in line_lists.yaml `molecular`; or e.g. ["CH", "CN", "CC"]
-IMPACT_THRESHOLD = 0.005             # a group is recommended if it adds absorption deeper than this anywhere
+IMPACT_THRESHOLD = 0.001             # a group is recommended if it adds absorption deeper than this anywhere
                                      # (normalised flux; 0.005 = 0.5 %, about the noise of a SNR ~200 spectrum)
 LINE_WINDOW = 0.4                    # A: half-width of the Fe line windows checked separately (if a line file exists)
 
 # Abundances of the other elements, as in find_stellar_parameters
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
-REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe];
+REFERENCE_SCALING = "absolute"       # "absolute": A(X) as published; "fe": keep the published [X/Fe];
                                      # "xfe": A(X)_sun (Grevesse 2007) + metallicity + published [X/Fe] (relative_abundances)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar
     # "N": 7.5,
 }
 USE_ISOTOPE_RATIOS = True            # 12C/13C from `isotope_ratios: C12_C13` in reference_abundance.yaml
 
-EXTRA_BROADENING = None              # None -> `vmac` in stars.yaml if set (rad-tan, faltbon FWHM argument in km/s),
+EXTRA_BROADENING = ('gauss', 6.5)              # None -> `vmac` in stars.yaml if set (rad-tan, faltbon FWHM argument in km/s),
                                      # else none; or e.g. ("radtan", 5.5) / ("gauss", 8.0) / ("rot", 15.0) (v sin i).
                                      # Matters: unbroadened molecular features look far deeper than observed ones
 N_JOBS = 12                          # parallel syntheses (one per group + the reference)
 KEEP_SPECTRA = True
 
+
+ALL_NAME = "all_molecules"           # the extra synthesis with master + every molecular file of the tested groups
 
 PROFILES = dict(FALTBON_PROFILE, rot=4)   # faltbon profile types; "rot": rotation, the number is v sin i
 
@@ -305,12 +310,17 @@ def main() -> None:
         base = dict(nlte=NLTE, nlte_info=nlte_info, opac=opac, feoh=feoh, alpha=alpha, abund=abund, c12_c13=c12_c13,
                     inst_fwhm=cfg.inst_fwhm, extra=extra)
         jobs = [dict(base, name="reference", linelists=master, out=outdir / "spectra" / "reference.cvl")]
+        all_files = []
         for g in groups:
             files = [resolve_path(p) for p in ll_cfg["molecular"][g]]
             missing = [str(p) for p in files if not p.exists()]
             if missing:
                 raise SystemExit(f"{g}: line list(s) not found: {missing}")
+            all_files += files
             jobs.append(dict(base, name=g, linelists=master + files, out=outdir / "spectra" / f"{g}.cvl"))
+        # every molecular file of the tested groups on top of the master lists (a file shared by groups only once)
+        jobs.append(dict(base, name=ALL_NAME, linelists=master + list(dict.fromkeys(all_files)),
+                         out=outdir / "spectra" / f"{ALL_NAME}.cvl"))
 
         results = {}
         t0 = time.time()
@@ -357,11 +367,25 @@ def main() -> None:
     rows.sort(key=lambda r: -r.get("max_depth", -1))
     plot_overview(outdir / "plots" / "impact_overview.png", rows)
 
+    # master + all molecular files together: reported next to the groups, but never part of the recommendation
+    all_row = dict(group=ALL_NAME, ok=results[ALL_NAME]["ok"],
+                   files=" ".join(Path(p).name for g in groups for p in ll_cfg["molecular"][g]))
+    if all_row["ok"]:
+        w2, test = np.loadtxt(outdir / "spectra" / f"{ALL_NAME}.cvl", usecols=(0, 1), unpack=True)
+        if len(w2) != len(wl) or not np.allclose(w2, wl):
+            test = np.interp(wl, w2, test)
+        info = impact(wl, ref, test, line_windows)
+        all_row.update(info)
+        plot_group(outdir / "plots" / f"{ALL_NAME}.png", ALL_NAME, wl, ref, test, obs, info)
+    else:
+        all_row["error"] = results[ALL_NAME]["error"]
+
     with (outdir / "summary.csv").open("w", newline="") as f:
-        keys = list(dict.fromkeys(k for r in rows for k in r))
+        out_rows = rows + [all_row]
+        keys = list(dict.fromkeys(k for r in out_rows for k in r))
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
-        w.writerows(rows)
+        w.writerows(out_rows)
     recommended = [r["group"] for r in rows if r.get("recommended")]
     (outdir / "summary.yaml").write_text(yaml.dump(dict(
         star=SELECTED_STAR, atmosphere=cfg.yaml_atm.name, departure_coefficients=cfg.yaml_dc.name, nlte=NLTE == "T",
@@ -370,15 +394,15 @@ def main() -> None:
         individual_abundances={el: float(a) for el, a in abund.items()}, c12_c13=c12_c13,
         reference_scaling=REFERENCE_SCALING if USE_REFERENCE_ABUNDANCES else None,
         abundance_overrides=dict(ABUNDANCE_OVERRIDES), impact_threshold=IMPACT_THRESHOLD,
-        recommended=recommended, groups=rows), sort_keys=False))
+        recommended=recommended, all_molecules=all_row, groups=rows), sort_keys=False))
 
     print(f"\n{'group':6s} {'max depth':>9s} {'at [A]':>9s} {'added mA':>9s} {'A > thr':>8s}"
           + ("  Fe windows > thr" if line_windows else ""))
-    for r in rows:
+    for r in rows + [all_row]:
         if not r["ok"]:
             print(f"{r['group']:6s}  failed: {r['error']}")
             continue
-        flag = "  <- include" if r["recommended"] else ""
+        flag = "  <- include" if r.get("recommended") else ""
         extra_col = f"  {r['fe_windows_affected']:3d} (max {r['fe_windows_max_depth']:.4f})" if line_windows else ""
         print(f"{r['group']:6s} {r['max_depth']:9.4f} {r['at_wavelength']:9.2f} {r['added_absorption_mA']:9.0f} "
               f"{r['angstrom_above_threshold']:8.1f}{extra_col}{flag}")
