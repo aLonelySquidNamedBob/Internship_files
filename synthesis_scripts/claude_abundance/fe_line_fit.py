@@ -58,6 +58,7 @@ import numpy as np
 import yaml
 from scipy.optimize import minimize_scalar
 from scipy.stats import linregress
+from scipy.stats import sem
 
 # ---------------------------------------------------------------------------
 # Paths and constants
@@ -503,7 +504,7 @@ class FitSettings:
     no_fe_profile: bool = True     # also synthesise every line region with A(Fe) = no_fe_abundance (one extra bsyn run
                                    # per line) and show it, with the same broadening / RV shift / continuum as the
                                    # best fit, as the "no Fe" profile: whatever absorbs there is not iron (blends)
-    no_fe_abundance: float = -20.0   # log eps(Fe) of that profile. Note that bsyn recomputes the electron pressure
+    no_fe_abundance: float = -20.0 # log eps(Fe) of that profile. Note that bsyn recomputes the gas pressure
                                    # with Fe removed, so other lines change slightly (see lines.csv: nofe_*)
     abund_band: bool = True        # also synthesise every line at the best-fit A(Fe) -/+ abund_band_offset (two extra
                                    # bsyn runs per line), with the same broadening / RV shift / continuum as the best
@@ -1313,19 +1314,21 @@ def analyze(rows: list[dict], s: FitSettings | None = None, flags: dict[str, str
                       flagged_ids=[i for i, f in zip(ids, flag) if f and not is_reject(f)],
                       rejected_by_hand_ids=[i for i, h in zip(ids, by_hand) if h],
                       max_synth_ids=[r["line_id"] for r in rows if r.get("stop_reason") == "max_synth"],
-                      selection=selection, flag=flag)
+                      selection=selection, flag=flag, n_total=len(rows))
     nan = float("nan")
     if len(A1k) >= 4:
         sl_ep, ic_ep, er_ep = linfit(ep1, A1k)
         sl_rew, ic_rew, er_rew = linfit(rew1, A1k)
         info.update(slope_ep=sl_ep, slope_ep_err=er_ep, icpt_ep=ic_ep,
                     slope_rew=sl_rew, slope_rew_err=er_rew, icpt_rew=ic_rew,
-                    A1=float(A1k.mean()), s1=float(A1k.std(ddof=1)), e1=float(A1k.std(ddof=1) / np.sqrt(len(A1k))))
+                    # A1=float(A1k.mean()), s1=float(A1k.std(ddof=1)), e1=float(A1k.std(ddof=1) / np.sqrt(len(A1k))))
+                    A1=float(A1k.mean()), s1=float(A1k.std(ddof=1)), e1=sem(A1k))
     else:
         info.update(slope_ep=nan, slope_ep_err=nan, icpt_ep=nan, slope_rew=nan, slope_rew_err=nan,
                     icpt_rew=nan, A1=nan, s1=nan, e1=nan)
     if len(A2) >= 2:
-        info.update(A2=float(A2.mean()), s2=float(A2.std(ddof=1)), e2=float(A2.std(ddof=1) / np.sqrt(len(A2))))
+        info.update(A2=float(A2.mean()), s2=float(A2.std(ddof=1)), e2=sem(A2))
+        # info.update(A2=float(A2.mean()), s2=float(A2.std(ddof=1)), e2=float(A2.std(ddof=1) / np.sqrt(len(A2))))
     else:
         info.update(A2=nan, s2=nan, e2=nan)
     info["dA"] = info["A2"] - info["A1"]
@@ -1335,16 +1338,19 @@ def analyze(rows: list[dict], s: FitSettings | None = None, flags: dict[str, str
 
 
 def print_summary(info: dict) -> None:
-    print(f"  Fe I : A = {info['A1']:.3f} +/- {info['e1']:.3f} (scatter {info['s1']:.3f}, "
+    print(f"  Fe I : A =           {info['A1']:.3f} +/- {info['e1']:.3f} (scatter {info['s1']:.3f}, "
           f"{info['n_fe1']} lines, {info['n_fe1_clipped']} sigma-clipped)")
-    print(f"  Fe II: A = {info['A2']:.3f} +/- {info['e2']:.3f} (scatter {info['s2']:.3f}, {info['n_fe2']} lines)")
+    print(f"  Fe II: A =           {info['A2']:.3f} +/- {info['e2']:.3f} (scatter {info['s2']:.3f}, "
+          f"{info['n_fe2']} lines, 0 sigma-clipped)")
     print(f"  A(Fe II) - A(Fe I) = {info['dA']:+.3f} +/- {info['dA_err']:.3f}")
-    print(f"  slope vs EP  = {info['slope_ep']:+.4f} +/- {info['slope_ep_err']:.4f} dex/eV")
-    print(f"  slope vs REW = {info['slope_rew']:+.4f} +/- {info['slope_rew_err']:.4f} dex/dex")
-    print(f"  sigma-clipped: {', '.join(info['clipped_ids']) or '-'}")
-    print(f"  flagged by hand (marked, still used if they pass the cuts): {', '.join(info['flagged_ids']) or '-'}")
-    print(f"  rejected by hand: {', '.join(info['rejected_by_hand_ids']) or '-'}")
-    print(f"  rejected by the quality cuts: {info['n_rejected']} (see `selection` in lines.csv)")
+    print(f"  slope vs EP  =       {info['slope_ep']:+.4f} +/- {info['slope_ep_err']:.4f} dex/eV")
+    print(f"  slope vs REW =       {info['slope_rew']:+.4f} +/- {info['slope_rew_err']:.4f} dex/dex")
+    print(f"  selection of lines (see `selection` in lines.csv):")
+    print(f"  used lines:                           {info['n_fe1'] + info['n_fe2']} / {info['n_total']}")
+    print(f"  sigma-clipped:                        {len(info['clipped_ids'])}")
+    print(f"  flagged by hand (marked, still used): {info['n_flagged']}")
+    print(f"  rejected by hand:                     {info['n_rejected_by_hand']}")
+    print(f"  rejected by quality cuts:             {info['n_rejected']}")
     if info.get("max_synth_ids"):
         print(f"  NOTE: maximum number of syntheses reached (not converged to a_tol): {', '.join(info['max_synth_ids'])}")
 
@@ -1363,7 +1369,7 @@ def totals_text(info: dict) -> str:
     return t
 
 
-def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") -> None:
+def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "", clean: bool = False) -> None:
     """A(Fe) against EP, REW and wavelength. Filled = used, x = sigma-clipped, open circle = rejected by the quality
     cuts, red diamond = rejected by hand; an orange square around a point = flagged by hand (a note, the point is
     treated like the others). The y range follows the used lines; points beyond it are
@@ -1396,16 +1402,17 @@ def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "") 
             sel = used & (ion == k)
             ax.errorbar(x[sel], A[sel], yerr=sig[sel], fmt="o", color=color, ms=4, lw=0.8,
                         label=f"Fe {'I' * k} used")
-        for kd, st in styles.items():
-            sel = (kind == kd) & np.isfinite(A)
-            if not sel.any():                                               # no empty legend entries
-                continue
-            inside = sel & (A >= lo) & (A <= hi)
-            ax.plot(x[inside], A[inside], **st)
-            for edge, below in ((lo, True), (hi, False)):
-                off = sel & ((A < lo) if below else (A > hi))
-                ax.plot(x[off], np.full(off.sum(), edge), marker="v" if below else "^", ls="none",
-                        color=st.get("color", st.get("mec")), ms=6)
+        if not clean:
+            for kd, st in styles.items():
+                sel = (kind == kd) & np.isfinite(A)
+                if not sel.any():                                               # no empty legend entries
+                    continue
+                inside = sel & (A >= lo) & (A <= hi)
+                ax.plot(x[inside], A[inside], **st)
+                for edge, below in ((lo, True), (hi, False)):
+                    off = sel & ((A < lo) if below else (A > hi))
+                    ax.plot(x[off], np.full(off.sum(), edge), marker="v" if below else "^", ls="none",
+                            color=st.get("color", st.get("mec")), ms=6)
         sel = flagged & np.isfinite(A)                                      # orange square around flagged points
         if sel.any():
             ax.plot(x[sel], np.clip(A[sel], lo, hi), marker="s", mfc="none", mec="tab:orange", mew=1.3, ls="none",

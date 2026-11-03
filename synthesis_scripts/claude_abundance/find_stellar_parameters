@@ -62,16 +62,16 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "SUN"
+SELECTED_STAR = "HD196944"
 
-TEFF = 5778                          # K
-LOGG = 4.44                          # dex (cgs)
-VMIC = 1.15                          # km/s
-FEH = 0.00                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+TEFF = 5213                          # K
+LOGG = 1.86                          # dex (cgs)
+VMIC = 1.18                          # km/s
+FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
-VMAC = 3.1
+VMAC = 7.7
 
-MASS = 0.0                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
+MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
                                      # 0.0 = plane-parallel)
 RUN_NOTE = ""                        # what is special about this run, e.g. "vmic 1.8" / "alt linelist"; goes into summary.yaml
 LINE_FILE = None                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
@@ -82,20 +82,20 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
                                      # Per line it is overridden by the chi2_left / chi2_right columns of the line CSV
     broad_profile="gauss",          # extra broadening done by faltbon: "radtan" (profile 3, zeta_RT = 1.433 x
                                      # the number) or "gauss" (profile 2, the number is the FWHM)
-    fit_broadening=True,            # True: fit the extra broadening per line (0..broad_max); False: use the
+    fit_broadening=False,            # True: fit the extra broadening per line (0..broad_max); False: use the
     broadening=VMAC,                  # fixed value in km/s for every line (only used when fit_broadening=False)
     broad_max=20.0,                  # upper limit when fitted (lines at the limit get broad_at_limit = True)
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
     rv_fixed=0.0,                    # shift for every line when fit_rv=False
     sigma_clip=True,                 # False: no sigma clipping of the Fe I lines
     clip_sigma=3.00,                 # threshold clip_sigma = 2.5
-    max_misfit=0.07,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
+    max_misfit=None,                 # reject lines whose systematic misfit (rms residual beyond the noise, as a
                                      # fraction of the line depth; `misfit` in lines.csv) is larger; None = no cut
     chi2_factor=None,                # optional old cut chi2_red > max(chi2_factor x median, 1); it punishes deep lines
     min_ep=1.4,                      # reject lines (Fe I and Fe II) with excitation potential < this [eV]; None or 0 =
                                      # no cut. They are still fitted and shown as rejected in the plots
-    fit_continuum=False,              # True: also fit a local continuum scale per line (weak prior around 1)
-    fit_region="line",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
+    fit_continuum=True,              # True: also fit a local continuum scale per line (weak prior around 1)
+    fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
     a_tol=0.001,
@@ -110,7 +110,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
 # ABUNDANCES. Anything not set below or in the reference file stays scaled solar for FEH (with the atmosphere's
 # [alpha/Fe]); Fe follows FEH; the fitted element (Fe) always gets its trial value, whatever is set here.
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
-REFERENCE_SCALING = "fe"             # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
+REFERENCE_SCALING = "fe"       # "absolute": A(X) as published; "fe": keep the published [X/Fe], i.e. shift
                                      # every reference A(X) by FEH - [Fe/H]_reference (A(Fe)_ref - 7.45; the solar value cancels)
 ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None = back to scaled solar. Beats the
                                      # reference file.
@@ -201,7 +201,9 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
     write_csv(outdir / "lines.csv", rows)
     mode = "NLTE" if nlte == "T" else "LTE"
     plot_diagnostics(rows, info, outdir / "diagnostics.png",
-                     f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}")
+                         f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}")
+    plot_diagnostics(rows, info, outdir / "diagnostics_clean.png",
+                         f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}", clean=True)    
     plot_overview(rows, outdir, outdir / "overview.png",
                   windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in lines},
                   title=f"{cfg.star} {mode}: Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}",
@@ -265,15 +267,16 @@ def main() -> None:
 
     lines = load_lines(cfg.line_file)
     manual = [r["line_id"] for r in lines if r["chi2_left"] is not None]
-    print(f"{len(manual)} line(s) with a manual fit region (chi2_left / chi2_right in {cfg.line_file.name})"
-          + (f": {', '.join(manual)}" if manual else ""))
+    print(f"{len(lines)} total line(s)")
+    print(f"{len(manual)} line(s) with a manual fit region (chi2_left / chi2_right in {cfg.line_file.name})")
     flags_file = resolve_path(LINE_FLAGS_FILE) if LINE_FLAGS_FILE else line_flags_path(cfg)
     flags = load_line_flags(flags_file)
     unknown = set(flags) - {r["line_id"] for r in lines}
     if unknown:
         raise SystemExit(f"{flags_file} names lines that are not in {cfg.line_file}: {sorted(unknown)}")
     n_rej = sum(is_reject(v) for v in flags.values())
-    print(f"{len(flags) - n_rej} flagged line(s) (marked, still used) and {n_rej} rejected by hand, from {flags_file}")
+    print(f"{len(flags) - n_rej} flagged line(s) (marked, still used), from {flags_file}") 
+    print(f"{n_rej} line(s) rejected by hand, from {flags_file}")
     if ONLY_FLAGGED:
         if not flags:
             raise SystemExit(f"ONLY_FLAGGED is set but {flags_file} flags no lines")
