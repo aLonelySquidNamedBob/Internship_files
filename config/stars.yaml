@@ -121,6 +121,11 @@ HE22081239:
 
     molecular_line_lists: 
       - "CH"
+      - "CN"
+      - "CC"
+      - "SiH"
+      - "NH"
+      - "MgH"
 
   notes: null
   
