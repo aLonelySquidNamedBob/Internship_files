@@ -105,7 +105,7 @@ HE22081239:
     raw:
       - null
     normalized:
-      - null
+      - "data/normalized_spectra/HE22081239_normalised.csv"
     
   synthesis:
     model_atmosphere: "data/interpolated/HE22081239/s5200_g+2.1_m1.0_t02_st_z-2.40_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
@@ -120,9 +120,9 @@ HE22081239:
     vmic: null # default is 1
 
     molecular_line_lists: 
-      - "CH"
-      - "CN"
       - "CC"
+      - "CN"
+      - "CH"
       - "SiH"
       - "NH"
       - "MgH"
