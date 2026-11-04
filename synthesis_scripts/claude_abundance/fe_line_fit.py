@@ -1002,41 +1002,61 @@ def no_fe_method(s: "FitSettings", cfg: StarConfig) -> str:
     if s.no_fe_method == "auto":
         return "linelist" if cfg.no_fe_linelists else "abundance"
     return s.no_fe_method
+ 
+def read_linelist_blocks(path: Path) -> list[tuple[str, str, list[str]]]:
+    """(header, name line, data lines) of every species block of a Turbospectrum line list, read the way bsyn
+    reads it: a header 'species' ion n, a name line, then exactly n lines, each starting with a wavelength.
+    Blank lines are skipped. Anything else (a header that is not recognised, a block with fewer lines than its
+    header says, a line where a header should be) raises ValueError with the file and line number, instead of
+    silently attaching lines to the previous species."""
+    text = [(k + 1, t) for k, t in enumerate(Path(path).read_text(errors="replace").splitlines(keepends=True))
+            if t.strip()]
+    blocks, i = [], 0
+    while i < len(text):
+        num, t = text[i]
+        h = _LL_HEADER.match(t)
+        if h is None:
+            raise ValueError(f"{path}:{num}: expected a species header 'species' ion n, got {t.strip()!r}"
+                             + (" (or the line count of the header above is too small)" if blocks else ""))
+        n = int(h[3])
+        if len(text) < i + 2 + n:
+            raise ValueError(f"{path}:{num}: header says {n} lines, but the file ends after {max(len(text) - i - 2, 0)}")
+        data = text[i + 2:i + 2 + n]
+        for k, (dnum, d) in enumerate(data):
+            try:
+                float(d.split(None, 1)[0])
+            except ValueError:
+                raise ValueError(f"{path}:{dnum}: line {k + 1} of the block at line {num} (header says {n}) does not "
+                                 f"start with a wavelength: {d.strip()!r}") from None
+        blocks.append((t, text[i + 1][1], [d for _, d in data]))
+        i += 2 + n
+    return blocks
+
+
+def is_metal_linelist(path: Path) -> bool:
+    """False for hydrogen lists (special profiles, own format) and files that are not Turbospectrum line lists."""
+    with Path(path).open(errors="replace") as f:
+        first = next((_LL_HEADER.match(t) for t in f if t.startswith("'")), None)
+    return first is not None and float(first[1]) >= 1.5
 
 
 def trim_linelists(paths: list[Path], lo: float, hi: float, outdir: Path) -> list[Path]:
     """Copies of Turbospectrum line lists with only the lines in [lo, hi]; species blocks are recounted and empty
-    ones dropped (a file left empty is dropped). Lists that start with hydrogen are passed through untouched."""
+    ones dropped (a file left empty is dropped). Lists that start with hydrogen are passed through untouched.
+    Malformed lists raise ValueError (see read_linelist_blocks)."""
     out_paths = []
     for path in paths:
-        text = Path(path).read_text(errors="replace").splitlines(keepends=True)
-        first = next((_LL_HEADER.match(t) for t in text if t.startswith("'")), None)
-        if first is None or float(first[1]) < 1.5:            # hydrogen (special profiles) or unknown format
+        if not is_metal_linelist(path):                      # hydrogen (special profiles) or unknown format
             out_paths.append(Path(path))
             continue
-        out, block, name, kept = [], None, None, []
-
-        def flush():
-            if block is not None and kept:
-                out.append(f"'{block[0]}' {block[1]} {len(kept)}\n")
+        out = []
+        for header, name, data in read_linelist_blocks(path):
+            kept = [d for d in data if lo <= float(d.split(None, 1)[0]) <= hi]
+            if kept:
+                h = _LL_HEADER.match(header)
+                out.append(f"'{h[1]}' {h[2]} {len(kept)}\n")
                 out.append(name)
                 out.extend(kept)
-
-        i = 0
-        while i < len(text):
-            h = _LL_HEADER.match(text[i])
-            if h:
-                flush()
-                block, name, kept = (h[1], h[2]), text[i + 1], []
-                i += 2
-                continue
-            try:
-                if lo <= float(text[i].split(None, 1)[0]) <= hi:
-                    kept.append(text[i])
-            except (ValueError, IndexError):
-                pass
-            i += 1
-        flush()
         if out:
             dst = outdir / f"ll_{len(out_paths):02d}_{Path(path).name}"
             dst.write_text("".join(out))
@@ -1138,7 +1158,8 @@ FE1_IONISATION_CM = 63737.704          # NIST
 FE1_MAX_DE = 50.0                      # cm^-1
 FE1_AMBIGUOUS_DE = 10.0                # cm^-1: two Fe I levels this close cannot be told apart by energy
 
-_LL_HEADER = re.compile(r"^'\s*([\d.]+)\s*'\s+(\d+)\s+(\d+)\s*$")
+# species header 'species' ion n; bsyn reads it list-directed, so anything after n is ignored
+_LL_HEADER = re.compile(r"^'\s*([\d.]+)\s*'\s+(\d+)\s+(\d+)(?:\s.*)?$", re.S)
 _LL_LEVELS = re.compile(r"^(?P<head>.*'\s+)(?P<lo>\d+)(?P<mid>\s+)(?P<up>\d+)(?P<tail>\s+'[^']*'\s+'[^']*'.*)$", re.S)
 
 
@@ -1179,15 +1200,16 @@ def assign_nlte_levels(cfg: StarConfig, lines: list[dict], workdir: Path) -> tup
     report: dict[str, dict] = {}
     paths = []
     for path in cfg.linelists:
-        out, changed, block = [], False, None
-        with Path(path).open(errors="replace") as f:
-            for ln in f:
-                h = _LL_HEADER.match(ln)
-                if h:
-                    block = int(h[2]) if abs(float(h[1]) - cfg.Z) < 1e-6 else None
-                    out.append(ln)
-                    continue
-                if block in wanted and not ln.startswith("'"):
+        if not is_metal_linelist(path):
+            paths.append(Path(path))
+            continue
+        out, changed = [], False
+        for header, name, data in read_linelist_blocks(path):
+            h = _LL_HEADER.match(header)
+            block = int(h[2]) if abs(float(h[1]) - cfg.Z) < 1e-6 else None
+            out += [header, name]
+            for ln in data:
+                if block in wanted:
                     t = ln.split(None, 2)
                     wl, ep = float(t[0]), float(t[1])
                     hit = next((r for r in wanted[block] if abs(r["wavelength"] - wl) < 0.002
