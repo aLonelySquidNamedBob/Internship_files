@@ -131,6 +131,8 @@ class StarConfig:
     model_atom: str
     atom_path: Path
     linelists: list
+    no_fe_linelists: list | None   # `linelists` with the master atomic list(s) swapped for line_lists.yaml `no_Fe`
+                                   # (hydrogen and molecular lists kept); None when line_lists.yaml has no `no_Fe`
     spectrum_file: Path | None
     line_file: Path
     rv: float
@@ -270,9 +272,13 @@ def load_star_config(star: str) -> StarConfig:
     elt = syn["NLTE_element"]
     el = nlte_cfg["element"][elt]
 
-    linelists = [resolve_path(p) for p in ll_cfg["master"]]
-    for mol in syn.get("molecular_line_lists") or []:
-        linelists += [resolve_path(p) for p in ll_cfg["molecular"][mol]]
+    master = [resolve_path(p) for p in ll_cfg["master"]]
+    molecular = [resolve_path(p) for mol in syn.get("molecular_line_lists") or [] for p in ll_cfg["molecular"][mol]]
+    linelists = master + molecular
+    no_fe_linelists = None
+    if ll_cfg.get("no_Fe"):            # Fe-free atomic list: replaces every non-hydrogen master list
+        no_fe_linelists = ([p for p in master if is_hydrogen_linelist(p)]
+                           + [resolve_path(p) for p in ll_cfg["no_Fe"]] + molecular)
 
     normalized = [p for p in (spectra.get("normalized") or []) if p]
     dc_dir = syn.get("departure_coefficients_path")
@@ -289,6 +295,7 @@ def load_star_config(star: str) -> StarConfig:
         model_atom=el["model_atom"],
         atom_path=Path(el["model_atom_path"]),
         linelists=linelists,
+        no_fe_linelists=no_fe_linelists,
         spectrum_file=HOME / normalized[0] if normalized else None,
         line_file=(HOME / s["selected_lines"] if s.get("selected_lines")
                    else HOME / "data" / "selected_lines" / star / "fe_kept_lines.csv"),
@@ -389,8 +396,9 @@ class LineSynth:
 {a.vmic}
 """
 
-    def _bsyn_input(self, abu: float, nlte: str, result: Path) -> str:
+    def _bsyn_input(self, abu: float, nlte: str, result: Path, linelists: list | None = None) -> str:
         a, c = self.atm, self.cfg
+        linelists = c.linelists if linelists is None else linelists
         return f"""\
 'NLTE :'          {nlte}
 'NLTEINFOFILE:'   '{self.nlte_info}'
@@ -405,8 +413,8 @@ class LineSynth:
 'HELIUM     :'    '0.00'
 'R-PROCESS  :'    '0.00'
 'S-PROCESS  :'    '0.00'
-{self._individual_abundances(abu)}{isotope_block(c.c12_c13)}'NFILES   :' '{len(c.linelists)}'
-""" + "\n".join(str(p) for p in c.linelists) + f"""
+{self._individual_abundances(abu)}{isotope_block(c.c12_c13)}'NFILES   :' '{len(linelists)}'
+""" + "\n".join(str(p) for p in linelists) + f"""
 'SPHERICAL:'  '{"T" if SPHERICAL_RT else "F"}'
   30
   300.00
@@ -426,26 +434,33 @@ class LineSynth:
 1 NBIN = (1 = NO IN BIN )
 """
 
-    def __call__(self, abu: float, nlte: str = "T"):
-        key = (round(float(abu), 4), nlte)
+    def __call__(self, abu: float, nlte: str = "T", variant: str = ""):
+        """Synthetic spectrum at A(Fe) = abu after the instrumental profile. variant "noFe": with
+        cfg.no_fe_linelists (no Fe lines, same babsma opacities and the same A(Fe) in bsyn's equilibrium)."""
+        key = (round(float(abu), 4), nlte, variant)
         if key not in self._cache:
-            stem = f"A{key[0]:.4f}_{nlte}"
+            stem = f"A{key[0]:.4f}_{nlte}" + (f"_{variant}" if variant else "")
             spec, cvl = self.workdir / f"{stem}.spec", self.workdir / f"{stem}.cvl"
-            run_program(BSYN, self._bsyn_input(key[0], nlte, spec), self.log, self.workdir)
+            if variant not in ("", "noFe"):
+                raise ValueError(f"unknown synthesis variant {variant!r}")
+            if variant == "noFe" and not self.cfg.no_fe_linelists:
+                raise ValueError("no `no_Fe` line list in line_lists.yaml")
+            lls = self.cfg.no_fe_linelists if variant == "noFe" else None
+            run_program(BSYN, self._bsyn_input(key[0], nlte, spec, lls), self.log, self.workdir)
             run_program(FALTBON, self._faltbon_input(spec, cvl, self.cfg.inst_fwhm, 2), self.log, self.workdir)
             self._cache[key] = np.loadtxt(cvl, usecols=(0, 1), unpack=True)
             self.n_runs += 1
         return self._cache[key]
 
-    def broadened(self, abu: float, nlte: str, broad: float, profile: str):
+    def broadened(self, abu: float, nlte: str, broad: float, profile: str, variant: str = ""):
         """The synthetic spectrum (after the instrumental profile) with the extra broadening on top, done by
         faltbon: `broad` is its FWHM argument in km/s (Gaussian FWHM, or 1/1.433 of zeta_RT for "radtan")."""
-        wl, fl = self(abu, nlte)
+        wl, fl = self(abu, nlte, variant)
         if broad < MIN_BROAD_KMS:
             return wl, fl
-        key = (round(float(abu), 4), nlte, profile, round(float(broad), 3))
+        key = (round(float(abu), 4), nlte, profile, round(float(broad), 3), variant)
         if key not in self._bcache:
-            stem = f"A{key[0]:.4f}_{nlte}"
+            stem = f"A{key[0]:.4f}_{nlte}" + (f"_{variant}" if variant else "")
             out = self.workdir / f"{stem}_{profile}_{key[3]:.3f}.bro"
             run_program(FALTBON, self._faltbon_input(self.workdir / f"{stem}.cvl", out, -key[3],
                                                      FALTBON_PROFILE[profile]), self.log, self.workdir)
@@ -535,8 +550,15 @@ class FitSettings:
     no_fe_profile: bool = True     # also synthesise every line region with A(Fe) = no_fe_abundance (one extra bsyn run
                                    # per line) and show it, with the same broadening / RV shift / continuum as the
                                    # best fit, as the "no Fe" profile: whatever absorbs there is not iron (blends)
-    no_fe_abundance: float = -20.0 # log eps(Fe) of that profile. Note that bsyn recomputes the gas pressure
-                                   # with Fe removed, so other lines change slightly (see lines.csv: nofe_*)
+    no_fe_method: str = "auto"     # how that profile removes the iron lines:
+                                   # "linelist":  bsyn with line_lists.yaml `no_Fe` (an atomic list without Fe lines)
+                                   #              in place of the master atomic list, at the best-fit A(Fe): the
+                                   #              ionisation / molecular balance and electron pressure stay those
+                                   #              of the fit, so the blends are shown at their true strength
+                                   # "abundance": the old trick, A(Fe) = no_fe_abundance with the full line lists
+                                   # "auto":      "linelist" if line_lists.yaml has `no_Fe`, else "abundance"
+    no_fe_abundance: float = -20.0 # log eps(Fe) of the "abundance" method. Note that bsyn recomputes the gas
+                                   # pressure with Fe removed, so other lines change slightly (see lines.csv: nofe_*)
     abund_band: bool = True        # also synthesise every line at the best-fit A(Fe) -/+ abund_band_offset (two extra
                                    # bsyn runs per line), with the same broadening / RV shift / continuum as the best
                                    # fit, and shade the region between them in fit.png, overview.png and review_fits.py
@@ -805,9 +827,9 @@ class LineFitter:
         self.evals[abu] = {"chi2": chi2, "dv": dv, "broad": broad, "cont": float(coef[0]), "coef": coef}
         return self.evals[abu]
 
-    def model_full(self, abu: float, ev: dict) -> np.ndarray:
+    def model_full(self, abu: float, ev: dict, variant: str = "") -> np.ndarray:
         """The model at this abundance on all pixels of the window, for plots and bestfit.csv."""
-        wl_syn, fl_syn = self.synth.broadened(abu, self.nlte, ev["broad"], self.s.broad_profile)
+        wl_syn, fl_syn = self.synth.broadened(abu, self.nlte, ev["broad"], self.s.broad_profile, variant)
         m = model_and_chi2(wl_syn, fl_syn, self.d_full, ev["dv"], None, 0.0)[1]
         return m * continuum(self.d_full, ev["coef"])
 
@@ -888,7 +910,10 @@ class LineFitter:
         model_nofe, nofe_status = np.full(len(self.d_full.wl), np.nan), "off"
         if s.no_fe_profile:
             try:
-                model_nofe, nofe_status = self.model_full(s.no_fe_abundance, nearest), "ok"
+                if no_fe_method(s, self.synth.cfg) == "linelist":
+                    model_nofe, nofe_status = self.model_full(a_near, nearest, "noFe"), "ok (linelist)"
+                else:
+                    model_nofe, nofe_status = self.model_full(s.no_fe_abundance, nearest), "ok (abundance)"
             except Exception as exc:                          # noqa: BLE001 - the fit itself is fine
                 nofe_status = f"failed: {type(exc).__name__}: {exc}"[:120]
         model_band, band_status = np.full((2, len(self.d_full.wl)), np.nan), "off"
@@ -958,6 +983,27 @@ def misfit_of(rms: float, noise: float, depth: float) -> float:
     return float(np.sqrt(max(rms ** 2 - noise ** 2, 0.0)) / depth)
 
 
+def is_hydrogen_linelist(path: Path) -> bool:
+    """True if the first species block of a Turbospectrum line list is hydrogen (e.g. DATA/Hlinedata)."""
+    with Path(path).open(errors="replace") as f:
+        for line in f:
+            if line.startswith("'"):
+                h = _LL_HEADER.match(line)
+                return h is not None and float(h[1]) < 1.5
+    return False
+
+
+def no_fe_method(s: "FitSettings", cfg: StarConfig) -> str:
+    """The no-Fe profile method actually used: "linelist" or "abundance" (resolves "auto")."""
+    if s.no_fe_method not in ("auto", "linelist", "abundance"):
+        raise ValueError(f"no_fe_method must be auto, linelist or abundance, not {s.no_fe_method!r}")
+    if s.no_fe_method == "linelist" and not cfg.no_fe_linelists:
+        raise ValueError("no_fe_method='linelist' but line_lists.yaml has no `no_Fe` entry")
+    if s.no_fe_method == "auto":
+        return "linelist" if cfg.no_fe_linelists else "abundance"
+    return s.no_fe_method
+
+
 def trim_linelists(paths: list[Path], lo: float, hi: float, outdir: Path) -> list[Path]:
     """Copies of Turbospectrum line lists with only the lines in [lo, hi]; species blocks are recounted and empty
     ones dropped (a file left empty is dropped). Lists that start with hydrogen are passed through untouched."""
@@ -1023,8 +1069,13 @@ def fit_one_line(job: dict) -> dict:
         data = Data(w, max(w - win_lo, win_hi - w), job["wl"], job["fl"], np.full(len(job["wl"]), 1.0 / job["snr"]))
         cfg = job["cfg"]
         if s.trim_linelists:
-            cfg = dataclasses.replace(cfg, linelists=trim_linelists(
-                cfg.linelists, win_lo - s.synth_pad - s.trim_margin, win_hi + s.synth_pad + s.trim_margin, workdir))
+            t_lo, t_hi = win_lo - s.synth_pad - s.trim_margin, win_hi + s.synth_pad + s.trim_margin
+            cfg = dataclasses.replace(cfg, linelists=trim_linelists(cfg.linelists, t_lo, t_hi, workdir))
+            if cfg.no_fe_linelists and no_fe_method(s, cfg) == "linelist":
+                nofe_dir = workdir / "ll_noFe"
+                nofe_dir.mkdir()
+                cfg = dataclasses.replace(cfg, no_fe_linelists=trim_linelists(cfg.no_fe_linelists, t_lo, t_hi,
+                                                                              nofe_dir))
         synth = LineSynth(cfg, job["atm"], win_lo - s.synth_pad, win_hi + s.synth_pad, workdir, workdir / "log.txt")
         region = (data.wl >= job["fit_lo"]) & (data.wl <= job["fit_hi"])
         fitter = LineFitter(synth, data, job["nlte"], s, job["fixed_broad"], region)
@@ -1194,6 +1245,10 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
     obs_wl, obs_fl = spectrum
     a_default = SOLAR_FE + atm.feoh
     a_guess = a_guess or {}
+    if s.no_fe_profile:                           # fail here, not in every worker, on a bad setting
+        method = no_fe_method(s, cfg)
+        print("no-Fe profile: " + (f"line list without Fe ({', '.join(Path(p).name for p in cfg.no_fe_linelists)})"
+                                   if method == "linelist" else f"A(Fe) = {s.no_fe_abundance} with the full line lists"))
 
     ll_dir = Path(tempfile.mkdtemp(prefix="ll_", dir=SCRATCH_DIR))
     levels: dict[str, dict] = {}

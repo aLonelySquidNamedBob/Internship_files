@@ -101,6 +101,9 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     a_tol=0.001,
     a_local=0.05,                    # the final parabola must use points within this of the best one [dex]
   
+    no_fe_method="auto",             # "no Fe" profile: "linelist" = line_lists.yaml `no_Fe` (Fe-free atomic list) at
+                                     # the best-fit A(Fe); "abundance" = old A(Fe) = -20 trick; "auto" = linelist if
+                                     # `no_Fe` exists, else abundance
     abund_band=True,                 # also synthesise every line at best-fit A(Fe) -/+ abund_band_offset (2 extra bsyn
     abund_band_offset=0.2,           # runs per line) and shade the region between them in fit.png / overview.png [dex]
   
