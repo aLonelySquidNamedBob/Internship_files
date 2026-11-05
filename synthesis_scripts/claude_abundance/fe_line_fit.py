@@ -1106,10 +1106,10 @@ def plot_cont_pixels(ax, wl: np.ndarray, obs: np.ndarray, cont_pixel: np.ndarray
     if cont_pixel is None or not np.any(cont_pixel):
         return False
     u, k = cont_pixel == 1, cont_pixel == 2
-    ax.plot(wl[u], obs[u], "o", mfc="none", mec="tab:green", mew=0.9, ms=ms, zorder=3,
+    ax.plot(wl[u], obs[u], "o", mfc="none", mec="limegreen", mew=0.9, ms=ms, zorder=0,
             label=f"continuum pixels ({u.sum()})" if label else None)
     if k.any():
-        ax.plot(wl[k], obs[k], "x", color="tab:orange", mew=1.0, ms=ms, zorder=3,
+        ax.plot(wl[k], obs[k], "x", color="tab:orange", mew=1.0, ms=ms, zorder=0,
                 label=f"clipped ({k.sum()})" if label else None)
     try:
         c = float(c)
