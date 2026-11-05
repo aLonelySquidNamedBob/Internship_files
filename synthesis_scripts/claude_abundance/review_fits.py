@@ -45,8 +45,9 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
-from fe_line_fit import (RUNS_DIR, is_reject, load_line_flags, load_lines, load_star_config, plot_overview,
-                         read_bestfit, save_line_flags, set_line_region, totals_text)
+from fe_line_fit import (RUNS_DIR, cont_text, is_reject, load_line_flags, load_lines, load_star_config,
+                         plot_cont_pixels, plot_overview, read_bestfit, read_cont_pixels, save_line_flags,
+                         set_line_region, totals_text)
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -238,6 +239,7 @@ class Reviewer:
         fit = self.run / "lines" / lid / "bestfit.csv"
         if fit.exists():
             wl, obs, mod, used, nofe, band, band_off = read_bestfit(fit)
+            cpix = read_cont_pixels(fit)
             left, right = self.windows.get(lid, (np.nan, np.nan))
             for a in (self.ax, self.axr):
                 a.axvspan(left, right, color="0.92", zorder=0)
@@ -254,6 +256,11 @@ class Reviewer:
             self.ax.plot(wl, mod, "r-", lw=1.2, label="best fit")
             if np.isfinite(nofe).any():
                 self.ax.plot(wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
+            plot_cont_pixels(self.ax, wl, obs, cpix, num(r, "cont"), ms=6)
+            if cpix is not None:                                  # the same pixels in the residuals
+                res = obs - mod
+                self.axr.plot(wl[cpix == 1], res[cpix == 1], "o", mfc="none", mec="tab:green", mew=0.9, ms=5)
+                self.axr.plot(wl[cpix == 2], res[cpix == 2], "x", color="tab:orange", mew=1.0, ms=5)
             self.ax.legend(fontsize=8, loc="lower left")
             self.axr.plot(wl[used], (obs - mod)[used], "k.", ms=2)
             self.axr.plot(wl[~used], (obs - mod)[~used], ".", color="0.7", ms=2)
@@ -274,7 +281,7 @@ class Reviewer:
             f"[{self.i + 1}/{len(self.rows)}]  {lid}   EP {num(r, 'ep'):.2f} eV   EW {num(r, 'ew_mA'):.0f} mA   "
             f"A(Fe) = {num(r, 'A'):.3f} +/- {num(r, 'sigma'):.3f}   misfit {num(r, 'misfit'):.3f}   chi2_red {num(r, 'chi2_red'):.2f}   "
             f"broad {num(r, 'broad_kms'):.1f} km/s   RV {num(r, 'dv_kms'):+.2f} km/s   cont {num(r, 'cont'):.3f}\n"
-            f"run: {r.get('selection', '?')}   |   NLTE levels: {r.get('nlte_levels', '?')}{others}   |   "
+            f"run: {r.get('selection', '?')}{cont_text(r, '   |   ')}   |   NLTE levels: {r.get('nlte_levels', '?')}{others}   |   "
             f"fit region {num(r, 'chi2_left'):.2f}..{num(r, 'chi2_right'):.2f} ({r.get('region_source', 'older run')})")
         d = self.review.get(lid)
         if d is None:

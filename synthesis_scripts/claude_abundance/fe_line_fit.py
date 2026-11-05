@@ -26,7 +26,9 @@ Per line:
     profile 3; free per line within broad_min..broad_max, or fixed for all lines with fit_broadening=False
     and FitSettings.broadening), the
     instrumental profile by faltbon too. The continuum is fixed at 1 unless
-    FitSettings.fit_continuum is set,
+    FitSettings.fit_continuum is set; then it is either a least-squares scale refitted with the line
+    (cont_method "lsq") or the clipped median of obs/synth over the continuum pixels, fixed before the
+    abundance fit (cont_method "median_clip"),
   * the pixel noise is 1/SNR, with the SNR from `spectra: snr:` in stars.yaml (default 100),
   * sigma(A) comes from the chi^2 curvature (delta chi^2 = 1, rescaled by
     sqrt(reduced chi^2) if the fit is poor).
@@ -530,6 +532,35 @@ class FitSettings:
     cont_prior: float = 0.01       # if fitted - sigma of a Gaussian prior on the local continuum (scale 1,
                                    # slope 0); <= 0 leaves it free. A free scale absorbs profile mismatches
                                    # when a window has little continuum.
+    cont_method: str = "lsq"       # if fitted - how the local continuum scale c is found:
+                                   # "lsq": least-squares scale (cont_order, cont_prior) on the fit-region
+                                   #        pixels, line core included, refitted at every trial A(Fe) (the
+                                   #        continuum-abundance correlation then sits in sigma(A))
+                                   # "median_clip": c from continuum pixels only, then FIXED for the A(Fe) fit:
+                                   #        candidates = pixels of the whole window where the synthetic depth
+                                   #        1 - model < cont_depth_max (model at a_guess with its fitted RV and
+                                   #        broadening); c = median(obs / model) over them, iteratively clipping
+                                   #        obs/model - c < -cont_clip_low*noise (unmodelled absorption: tellurics,
+                                   #        missing lines) and > +cont_clip_high*noise (cosmics), noise = robust MAD
+                                   #        of the candidates. Its error, sigma_c = 1.2533 noise / sqrt(n), is
+                                   #        propagated into sigma(A) (column sigma_cont). Falls back to "lsq" (and
+                                   #        says so in cont_method of lines.csv) when fewer than cont_min_pixels
+                                   #        survive or more than cont_max_clip_frac of the candidates are clipped.
+                                   #        Continuum pixels are drawn in fit.png, overview.png and review_fits.py.
+    cont_depth_max: float = 0.005  # median_clip: candidate continuum pixel if the synthetic depth is below this
+    cont_clip_low: float = 3.0     # median_clip: clip pixels this many noise sigma below the continuum ...
+    cont_clip_high: float = 4.0    # ... and this many above it
+    cont_clip_iter: int = 3        # median_clip: maximum clipping iterations (stops earlier when nothing changes)
+    cont_clip_grow: int = 1        # median_clip: also drop this many pixels on each side of a run of >= 2
+                                   # clipped pixels (the shallow wings of a telluric / unmodelled line are below
+                                   # the clip threshold; single noise outliers are not grown)
+    cont_noise_floor: float = 0.002  # median_clip: lower limit of the clipping noise (a MAD from few pixels can be
+                                   # tiny; normalisation is not better than this anyway)
+    cont_mask_clipped: bool = True # median_clip: also leave the clipped pixels out of chi^2 (the synthesis says
+                                   # continuum, the data say absorption: telluric or a missing line)
+    cont_min_pixels: int = 10      # median_clip: fall back to "lsq" with fewer surviving pixels ...
+    cont_max_clip_frac: float = 0.5  # ... or when more than this fraction of the candidates was clipped (the median
+                                   # breaks down at 0.5)
     assign_nlte_levels: bool = True  # NLTE: give the selected lines missing model-atom level numbers (all Fe II
                                    # lines, a few Fe I) by energy, see "NLTE level identification" below
     no_fe_profile: bool = True     # also synthesise every line region with A(Fe) = no_fe_abundance (one extra bsyn run
@@ -731,13 +762,14 @@ class Data:
     sig: np.ndarray
 
 
-def model_and_chi2(wl_syn, fl_syn, d: Data, dv: float, order: int | None, prior: float):
+def model_and_chi2(wl_syn, fl_syn, d: Data, dv: float, order: int | None, prior: float, scale: float = 1.0):
     """Synthetic (already broadened) -> RV shift -> best continuum scale -> chi^2.
-    order None: continuum fixed at 1. `prior` > 0 adds a Gaussian prior (scale = 1 +/- prior, higher terms =
-    0 +/- prior) to the continuum."""
+    order None: continuum fixed at `scale` (1 unless cont_method = "median_clip"). `prior` > 0 adds a Gaussian
+    prior (scale = 1 +/- prior, higher terms = 0 +/- prior) to the continuum."""
     m = np.interp(d.wl / (1.0 + dv / C_KMS), wl_syn, fl_syn)
     if order is None:
-        return float(np.sum(((d.fl - m) / d.sig) ** 2)), m, np.array([1.0])
+        m = m * scale
+        return float(np.sum(((d.fl - m) / d.sig) ** 2)), m, np.array([float(scale)])
     x = (d.wl - d.mid) / d.half
     basis = np.vstack([m * x**k for k in range(order + 1)]).T
     lhs, rhs = basis / d.sig[:, None], d.fl / d.sig
@@ -758,6 +790,56 @@ def continuum(d: Data, coef: np.ndarray) -> np.ndarray:
     return sum(c * x**k for k, c in enumerate(coef))
 
 
+def _grow_runs(bad: np.ndarray, grow: int) -> np.ndarray:
+    """`bad` plus `grow` pixels on each side of every run of >= 2 adjacent bad pixels (a real feature spans
+    several pixels; single noise outliers are not grown, which would eat the few continuum pixels)."""
+    if grow <= 0 or not bad.any():
+        return bad
+    n = len(bad)
+    run2 = bad & (np.r_[False, bad[:-1]] | np.r_[bad[1:], False])        # bad pixels with a bad neighbour
+    out = bad.copy()
+    for i in np.flatnonzero(run2):
+        out[max(i - grow, 0):min(i + grow + 1, n)] = True
+    return out
+
+
+def median_clip_continuum(obs: np.ndarray, model: np.ndarray, s: "FitSettings", noise_default: float) -> dict:
+    """The continuum scale from continuum pixels (cont_method = "median_clip"). `model` is the unscaled
+    synthetic on the observed pixels. Candidates: 1 - model < cont_depth_max. c = median(obs / model), then
+    pixels with obs/model - c < -cont_clip_low*noise or > +cont_clip_high*noise are dropped and c, noise
+    recomputed (cont_clip_grow pixels next to a run of clipped ones are dropped too), until nothing changes (at most cont_clip_iter times). noise = 1.4826 MAD of the kept ratios
+    (noise_default, i.e. 1/SNR, while fewer than 5 pixels are kept).
+    Returns c, its error, the noise, the masks of kept (`used`) and clipped candidates, and `ok` = False with a
+    `reason` when the estimate should not be trusted (too few pixels left, too many clipped)."""
+    cand = (1.0 - model) < s.cont_depth_max
+    ratio = np.where(cand, obs / np.where(model > 0, model, np.nan), np.nan)
+    keep = cand & np.isfinite(ratio)
+    c, noise = 1.0, noise_default
+    for _ in range(max(int(s.cont_clip_iter), 0) + 1):
+        if not keep.any():
+            break
+        c = float(np.median(ratio[keep]))
+        if keep.sum() >= 5:
+            noise = max(1.4826 * float(np.median(np.abs(ratio[keep] - c))), s.cont_noise_floor)
+        bad = cand & np.isfinite(ratio) & ((ratio - c < -s.cont_clip_low * noise) |
+                                           (ratio - c > s.cont_clip_high * noise))
+        bad = _grow_runs(bad, int(s.cont_clip_grow))
+        new = cand & np.isfinite(ratio) & ~bad
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    n_cand, n_used = int(cand.sum()), int(keep.sum())
+    clipped = cand & ~keep
+    frac = clipped.sum() / n_cand if n_cand else 1.0
+    reason = ""
+    if n_used < s.cont_min_pixels:
+        reason = f"{n_used} continuum pixels < {s.cont_min_pixels}"
+    elif frac > s.cont_max_clip_frac:
+        reason = f"{frac:.0%} of {n_cand} candidates clipped"
+    return dict(c=c, sigma_c=1.2533 * noise / np.sqrt(max(n_used, 1)), noise=noise, used=keep, clipped=clipped,
+                ok=not reason, reason=reason)
+
+
 class LineFitter:
     """chi^2(A(Fe)) with the nuisance parameters (broadening, RV shift, optionally continuum) profiled out at
     each abundance: an outer 1-D search over the broadening (one faltbon call per value) around an inner 1-D
@@ -772,7 +854,12 @@ class LineFitter:
         self.region = np.ones(len(data.wl), bool) if region is None else region
         self.d = Data(data.mid, data.half, data.wl[self.region], data.fl[self.region], data.sig[self.region])
         self.fixed_broad = fixed_broad
+        if s.cont_method not in ("lsq", "median_clip"):
+            raise ValueError(f"cont_method must be 'lsq' or 'median_clip', not {s.cont_method!r}")
         self.order = s.cont_order if s.fit_continuum else None
+        self.scale = 1.0                                    # the fixed continuum when self.order is None
+        self.cont_info: dict | None = None                  # median_clip result (None: not used)
+        self.cont_method = "fixed" if not s.fit_continuum else "lsq"
         self.n_free = int(s.fit_rv) + int(fixed_broad is None)
         self.evals: dict[float, dict] = {}
 
@@ -781,7 +868,7 @@ class LineFitter:
         wl_syn, fl_syn = self.synth.broadened(abu, self.nlte, broad, self.s.broad_profile)
 
         def chi2(dv):
-            return model_and_chi2(wl_syn, fl_syn, self.d, dv, self.order, self.s.cont_prior)
+            return model_and_chi2(wl_syn, fl_syn, self.d, dv, self.order, self.s.cont_prior, self.scale)
 
         dv = self.s.rv_fixed
         if self.s.fit_rv:
@@ -805,6 +892,31 @@ class LineFitter:
         self.evals[abu] = {"chi2": chi2, "dv": dv, "broad": broad, "cont": float(coef[0]), "coef": coef}
         return self.evals[abu]
 
+    def unscaled_full(self, abu: float, ev: dict) -> np.ndarray:
+        """The broadened, RV-shifted synthetic at this abundance on all pixels of the window, continuum 1."""
+        wl_syn, fl_syn = self.synth.broadened(abu, self.nlte, ev["broad"], self.s.broad_profile)
+        return model_and_chi2(wl_syn, fl_syn, self.d_full, ev["dv"], None, 0.0)[1]
+
+    def set_median_clip_continuum(self, a_guess: float) -> None:
+        """cont_method = "median_clip": RV and broadening at a_guess with the "lsq" continuum, the continuum
+        pixels and c from that model, then c fixed for the abundance fit (the evaluations so far are dropped:
+        they used a different continuum). On failure the "lsq" continuum stays and the reason is kept."""
+        ev = self.at(a_guess)
+        model = self.unscaled_full(round(float(a_guess), 4), ev)
+        info = median_clip_continuum(self.d_full.fl, model, self.s, float(np.median(self.d_full.sig)))
+        self.cont_info = info
+        if not info["ok"]:
+            self.cont_method = f"lsq (median_clip failed: {info['reason']})"
+            return
+        self.evals.clear()
+        self.order, self.scale, self.cont_method = None, info["c"], "median_clip"
+        if self.s.cont_mask_clipped and info["clipped"].any():
+            region = self.region & ~info["clipped"]
+            if region.sum() >= 5:
+                d = self.d_full
+                self.region = region
+                self.d = Data(d.mid, d.half, d.wl[region], d.fl[region], d.sig[region])
+
     def model_full(self, abu: float, ev: dict) -> np.ndarray:
         """The model at this abundance on all pixels of the window, for plots and bestfit.csv."""
         wl_syn, fl_syn = self.synth.broadened(abu, self.nlte, ev["broad"], self.s.broad_profile)
@@ -818,6 +930,8 @@ class LineFitter:
 
         if len(self.d.wl) < 5:
             raise RuntimeError(f"only {len(self.d.wl)} pixels in the fit region")
+        if s.fit_continuum and s.cont_method == "median_clip":
+            self.set_median_clip_continuum(float(np.clip(a_guess, lo, hi)))
         for a in (a_guess - step, a_guess, a_guess + step):
             self.at(np.clip(a, lo, hi))
 
@@ -877,12 +991,28 @@ class LineFitter:
                 bracketed = False
 
         n = len(self.d.wl)
-        n_cont = s.cont_order + 1 if self.order is not None else 0
+        n_cont = s.cont_order + 1 if self.order is not None else 0     # median_clip: c comes from other pixels
         dof = max(n - n_cont - self.n_free - 1, 1)
         a_near = float(xs[np.argmin(np.abs(xs - a_best))])
         nearest = self.evals[a_near]
         chi2_red = float(nearest["chi2"] / dof)
         sigma = (1.0 / np.sqrt(curvature)) * np.sqrt(max(chi2_red, 1.0)) if bracketed else np.nan
+        sigma_cont = 0.0
+        if self.cont_method == "median_clip" and bracketed:
+            # c is fixed in the fit, so its error is added by hand: dA/dc from the change of the model with A
+            # (the two evaluated points around the best one), sigma_cont = |dA/dc| sigma_c
+            x1, x2 = xs[i - 1], xs[i + 1]
+            m1, m2 = (self.unscaled_full(x, nearest)[self.region] for x in (x1, x2))
+            g = (m2 - m1) / (x2 - x1)                                   # d model / dA, continuum 1
+            m0 = self.unscaled_full(a_near, nearest)[self.region]
+            if np.sum(g ** 2) > 0:
+                sigma_cont = abs(float(np.sum(m0 * g) / (self.scale * np.sum(g ** 2)))) * self.cont_info["sigma_c"]
+        sigma_fit = sigma
+        sigma = float(np.hypot(sigma, sigma_cont)) if np.isfinite(sigma) else sigma
+        ci = self.cont_info
+        cont_pixel = np.zeros(len(self.d_full.wl), int)                 # 1 used for c, 2 clipped candidate
+        if ci is not None:
+            cont_pixel[ci["used"]], cont_pixel[ci["clipped"]] = 1, 2
         at_broad_limit = self.fixed_broad is None and (nearest["broad"] >= s.broad_max - 0.05 or
                                                        nearest["broad"] <= s.broad_min + 0.05)
         model_nofe, nofe_status = np.full(len(self.d_full.wl), np.nan), "off"
@@ -903,11 +1033,16 @@ class LineFitter:
                     model_nofe=model_nofe, no_fe_status=nofe_status, model_band=model_band, band_status=band_status,
                     broad_kms=nearest["broad"], broad_at_limit=bool(at_broad_limit), cont=nearest["cont"],
                     n_synth=len(self.evals), stop_reason=stop, bracket_dex=round(bracket, 4), at_boundary=not bracketed,
+                    sigma_fit=float(sigma_fit), sigma_cont=round(float(sigma_cont), 5), cont_method=self.cont_method,
+                    cont_npix=int(ci["used"].sum()) if ci else 0, cont_nclip=int(ci["clipped"].sum()) if ci else 0,
+                    cont_noise=round(float(ci["noise"]), 5) if ci else np.nan,
+                    cont_median=round(float(ci["c"]), 5) if ci else np.nan, cont_pixel=cont_pixel,
                     model=self.model_full(a_near, nearest), used=self.region.copy())
 
 
 def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, used: np.ndarray,
-              nofe: np.ndarray | None = None, band: np.ndarray | None = None, band_offset: float = 0.0) -> None:
+              nofe: np.ndarray | None = None, band: np.ndarray | None = None, band_offset: float = 0.0,
+              cont_pixel: np.ndarray | None = None) -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -921,6 +1056,7 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
         ax.axvline(b, color="tab:blue", lw=0.8, ls="--", zorder=0)
     ax.plot(data.wl[used], data.fl[used], "k.", ms=3)
     ax.plot(data.wl[~used], data.fl[~used], ".", color="0.7", ms=3, label="not in the fit")
+    has_cont = plot_cont_pixels(ax, data.wl, data.fl, cont_pixel, res.get("cont"), ms=5)
     has_band = band is not None and np.isfinite(band).any()
     if has_band:
         ax.fill_between(data.wl, band[0], band[1], color="tab:red", alpha=0.2, lw=0, zorder=1,
@@ -928,14 +1064,51 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
     ax.plot(data.wl, model, "r-")
     if nofe is not None and np.isfinite(nofe).any():
         ax.plot(data.wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
-    if (~used).any() or (nofe is not None and np.isfinite(nofe).any()) or has_band:
+    if (~used).any() or (nofe is not None and np.isfinite(nofe).any()) or has_band or has_cont:
         ax.legend(fontsize=7, loc="lower left")
     ax.set_title(f"{res['line_id']}  A(Fe)={res['A']:.2f}+/-{res['sigma']:.2f}  chi2r={res['chi2_red']:.1f}  "
-                 f"broad={res['broad_kms']:.1f} km/s", fontsize=9)
+                 f"broad={res['broad_kms']:.1f} km/s" + cont_text(res, "\n"), fontsize=9)
     ax.set_xlabel("Wavelength [A]")
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     plt.close(fig)
+
+
+def plot_cont_pixels(ax, wl: np.ndarray, obs: np.ndarray, cont_pixel: np.ndarray | None, c=None,
+                     ms: float = 5.0, label: bool = True) -> bool:
+    """Mark the continuum pixels of cont_method = "median_clip" (cont_pixel 1: used for c, green ring; 2: candidate
+    clipped as an outlier, orange cross) and the continuum level c (green dotted). False if there are none."""
+    if cont_pixel is None or not np.any(cont_pixel):
+        return False
+    u, k = cont_pixel == 1, cont_pixel == 2
+    ax.plot(wl[u], obs[u], "o", mfc="none", mec="tab:green", mew=0.9, ms=ms, zorder=3,
+            label=f"continuum pixels ({u.sum()})" if label else None)
+    if k.any():
+        ax.plot(wl[k], obs[k], "x", color="tab:orange", mew=1.0, ms=ms, zorder=3,
+                label=f"clipped ({k.sum()})" if label else None)
+    try:
+        c = float(c)
+    except (TypeError, ValueError):
+        c = np.nan
+    if np.isfinite(c):
+        ax.axhline(c, color="tab:green", lw=0.8, ls=":", zorder=2)
+    return True
+
+
+def cont_text(r: dict, sep: str = "  ") -> str:
+    """'c = ... (median of n px, k clipped, noise ...)' for a median_clip line, else ''."""
+    method = str(r.get("cont_method", "") or "")
+    if "median_clip" not in method:
+        return ""
+
+    def num(k):
+        try:
+            return float(r.get(k, "nan"))
+        except (TypeError, ValueError):
+            return float("nan")
+    head = "c median" if method == "median_clip" else "c LSQ fallback"
+    return (f"{sep}{head} {num('cont_median'):.4f}: {num('cont_npix'):.0f} px, {num('cont_nclip'):.0f} clipped, "
+            f"noise {num('cont_noise'):.4f}, sigma_cont {num('sigma_cont'):.3f}")
 
 
 def fit_quality(wl: np.ndarray, obs: np.ndarray, model: np.ndarray, used: np.ndarray, centre: float) -> dict:
@@ -1027,7 +1200,8 @@ def fit_one_line(job: dict) -> dict:
                ep=float(row["excitation_potential"]), ew_mA=float(row["voigt_fit_area"]),
                rew=float(np.log10(row["voigt_fit_area"] / 1000.0 / w)),
                A=np.nan, sigma=np.nan, chi2_red=np.nan, dv_kms=np.nan, broad_kms=np.nan, broad_at_limit=False,
-               cont=np.nan, npts=int(len(job["wl"])), n_synth=0, stop_reason="", bracket_dex=np.nan, at_boundary=False,
+               cont=np.nan, cont_method="", cont_npix=0, cont_nclip=0, cont_noise=np.nan, cont_median=np.nan,
+               sigma_fit=np.nan, sigma_cont=np.nan, npts=int(len(job["wl"])), n_synth=0, stop_reason="", bracket_dex=np.nan, at_boundary=False,
                chi2_left=round(job["fit_lo"], 4), chi2_right=round(job["fit_hi"], 4), region_source=job["region_source"],
                nofe_depth_centre=np.nan, nofe_depth_max=np.nan, no_fe_status="off", band_status="off",
                noise=np.nan, n_cont=0, rms_resid=np.nan, line_depth=np.nan, misfit=np.nan, noise_source="",
@@ -1051,18 +1225,21 @@ def fit_one_line(job: dict) -> dict:
         fitter = LineFitter(synth, data, job["nlte"], s, job["fixed_broad"], region)
         out = fitter.run(job["a_guess"], job["warm"])
         model, used, nofe, band = out.pop("model"), out.pop("used"), out.pop("model_nofe"), out.pop("model_band")
+        cont_pixel = out.pop("cont_pixel")
         res.update(out)
         res.update(fit_quality(data.wl, data.fl, model, used, w))
         if np.isfinite(nofe).any():                           # absorption of everything that is not iron
             res["nofe_depth_centre"] = round(float(1.0 - nofe[np.abs(data.wl - w) <= 0.03].min()), 4)
             res["nofe_depth_max"] = round(float(1.0 - nofe[used].min()), 4)
         off = s.abund_band_offset
-        np.savetxt(outdir / "bestfit.csv", np.column_stack([data.wl, data.fl, model, used.astype(int), nofe, *band]),
+        np.savetxt(outdir / "bestfit.csv",
+                   np.column_stack([data.wl, data.fl, model, used.astype(int), nofe, *band, cont_pixel]),
                    delimiter=",", comments="",
-                   header=f"wavelength,flux_obs,flux_model,used_in_fit,flux_noFe,flux_A-{off:.3f},flux_A+{off:.3f}",
-                   fmt=["%.4f", "%.6f", "%.6f", "%d", "%.6f", "%.6f", "%.6f"])
+                   header=f"wavelength,flux_obs,flux_model,used_in_fit,flux_noFe,flux_A-{off:.3f},flux_A+{off:.3f},"
+                          "cont_pixel",
+                   fmt=["%.4f", "%.6f", "%.6f", "%d", "%.6f", "%.6f", "%.6f", "%d"])
         if s.make_plots:
-            _plot_fit(outdir / "fit.png", res, data, model, row, used, nofe, band, off)
+            _plot_fit(outdir / "fit.png", res, data, model, row, used, nofe, band, off, cont_pixel)
     except Exception as exc:                              # noqa: BLE001 - keep the batch going
         res["status"] = f"failed: {type(exc).__name__}: {exc}"
         # The full Turbospectrum log is ~15 MB per line (bsyn warns about every Fe line of the whole line
@@ -1514,6 +1691,17 @@ def read_bestfit(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     return a[:, 0], a[:, 1], a[:, 2], used, nofe, band, offset
 
 
+def read_cont_pixels(path: Path) -> np.ndarray | None:
+    """The cont_pixel column of a bestfit.csv (0 not a continuum pixel, 1 used for c, 2 clipped), None for older
+    files and runs that did not use cont_method = "median_clip"."""
+    with Path(path).open() as f:
+        head = f.readline().strip().split(",")
+    if "cont_pixel" not in head:
+        return None
+    a = np.loadtxt(path, delimiter=",", skiprows=1, ndmin=2, usecols=head.index("cont_pixel")).ravel().astype(int)
+    return a if a.any() else None
+
+
 def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str, tuple] | None = None,
                   title: str = "", marks: dict[str, str] | None = None, ncols: int = 8,
                   totals: str = "", fit_settings: dict | None = None) -> None:
@@ -1554,6 +1742,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
         fit = Path(run_dir) / "lines" / lid / "bestfit.csv"
         if fit.exists():
             wl, obs, mod, used, nofe, band, _ = read_bestfit(fit)
+            cpix = read_cont_pixels(fit)
             lo, hi = min(obs.min(), mod.min(), np.nanmin(band, initial=np.inf)), max(obs.max(), mod.max())
             base = lo - 0.12 * (hi - lo) - 0.02
             if lid in windows:
@@ -1571,6 +1760,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
             ax.plot(wl, mod, "r-", lw=0.8)
             if np.isfinite(nofe).any():
                 ax.plot(wl, nofe, "-", color="tab:cyan", lw=0.8)
+            plot_cont_pixels(ax, wl, obs, cpix, f(r, "cont"), ms=2.8, label=False)
             ax.set_xlim(wl.min(), wl.max())
             ax.set_ylim(base - 0.04 * (hi - lo) - 0.01, hi + 0.04 * (hi - lo) + 0.005)
         else:
@@ -1593,7 +1783,10 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
         ax.set_title(f"{n}. {lid}  A={f(r, 'A'):.2f}+/-{f(r, 'sigma'):.2f}  {short}\n"
                      f"misfit {f(r, 'misfit'):.3f}  chi2r {f(r, 'chi2_red'):.2f}\n"
                      f"RV {f(r, 'dv_kms'):+.2f}{fix('rv')}  b {f(r, 'broad_kms'):.2f}{fix('broad')}  "
-                     f"c {f(r, 'cont'):.3f}{fix('cont')}",
+                     f"c {f(r, 'cont'):.3f}{fix('cont')}"
+                     + ({"median_clip": f" med {f(r, 'cont_npix'):.0f}px/{f(r, 'cont_nclip'):.0f}clip"}
+                        .get(str(r.get("cont_method", "")), " LSQ fallback" if "median_clip" in
+                             str(r.get("cont_method", "")) else "")),
                      fontsize=6.5, color=color, loc="left")
         if lid in marks:
             ax.text(0.02, 0.04, marks[lid], transform=ax.transAxes, fontsize=6.5, color="tab:blue",
@@ -1608,7 +1801,8 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
     fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, red rejected "
                  "(quality cuts or by hand);  orange text: flagged by hand (still used);  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
                  + (f"red band: A(Fe) +/- {fs['abund_band_offset']:g} dex;  " if fs.get("abund_band") else "") +
-                 "bottom trace: obs - fit\n"
+                 "bottom trace: obs - fit;  green rings: continuum pixels (median_clip), orange crosses: clipped, "
+                 "green dotted: c\n"
                  f"per panel: RV shift [km/s], b = extra broadening [km/s, faltbon {profile or 'FWHM'} argument], c = continuum "
                  "factor; (fixed) = not fitted in this run", fontsize=10,
                  y=1 - 0.25 / (row_h * nrows + head), va="top")
