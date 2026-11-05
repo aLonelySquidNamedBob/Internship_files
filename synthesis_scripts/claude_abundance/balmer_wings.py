@@ -33,22 +33,26 @@ from fe_line_fit import (C_KMS, RUNS_DIR, SOLAR_FE, AtmosphereSpec, LineSynth, l
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "TIC396792499"
 RUN = None                    # run directory (or name) in runs/<star>/fe_abundance/; None: the newest one
 SHOW_DTEFF = True            # False: leave out the Teff - DTEFF and Teff + DTEFF syntheses
-DTEFF = 300                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
+DTEFF = 100                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
 
 # One more synthesis with any parameters, e.g. the ones of a paper: a dict, or None to leave it out.
 # teff, logg, feh are required; vmic is optional (default: the Fe run's), so is mass (default: the Fe run's; 0.0 =
 # plane-parallel, the spherical MARCS grid stops at logg 3.5). The atmosphere is interpolated like the others. The
 # abundances are those of the Fe run shifted by feh - [Fe/H] of the run (the same [X/Fe]), A(Fe) = 7.45 + feh.
 
-SHOW_CUSTOM = False
-CUSTOM = dict(label="Riano", teff=6565, logg=4.11, feh=-0.21, vmic=1.6) if SHOW_CUSTOM else None
+SHOW_CUSTOM = True
+# CUSTOM = dict(label="Riano", teff=4667, logg=1.28, feh=-2.97, vmic=1.4) if SHOW_CUSTOM else None # HD115444
+# CUSTOM = dict(label="Riano", teff=5539, logg=2.44, feh=-1.95, vmic=1.2) if SHOW_CUSTOM else None # HD196944
+# CUSTOM = dict(label="Riano", teff=6565, logg=4.11, feh=-0.21, vmic=1.6) if SHOW_CUSTOM else None # HD2454
+CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
+
 
 
 LINES = {"H-alpha": 6562.80, "H-beta": 4861.30}    # centres [A]
-HALF_WIDTH = 40.0             # plotted and synthesised range around each line: centre +/- this [A]
+HALF_WIDTH = 20.0             # plotted and synthesised range around each line: centre +/- this [A]
 YLIM = (0.80, 1.03)           # flux range of the spectrum panels (the core is cut off to show the wings)
 RESID_YLIM = 0.04             # residual panels: +/- this
 

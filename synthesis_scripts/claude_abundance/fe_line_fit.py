@@ -1617,9 +1617,10 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
                 if np.isfinite(b):
                     ax.axvline(b, color="tab:blue", lw=0.6, ls="--", zorder=0)
             ax.axhline(base, color="0.7", lw=0.5)
-            ax.plot(wl, base + np.where(used, obs - mod, np.nan), color="0.5", lw=0.6)
+            ax.plot(wl, base + (obs - mod), color="0.5", lw=0.6)
             ax.plot(wl[used], obs[used], "k.", ms=1.5)
             ax.plot(wl[~used], obs[~used], ".", color="0.75", ms=1.5)
+            ax.axhline(f(r, 'cont'), color="k", lw=0.6)
             if np.isfinite(band).any():
                 ax.fill_between(wl, band[0], band[1], color="tab:red", alpha=0.2, lw=0, zorder=1)
             ax.plot(wl, mod, "r-", lw=0.8)
