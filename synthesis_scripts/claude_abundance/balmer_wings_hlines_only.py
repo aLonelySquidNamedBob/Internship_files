@@ -40,7 +40,7 @@ from fe_line_fit import (C_KMS, RUNS_DIR, SOLAR_FE, TS_DATA, AtmosphereSpec, Lin
 SELECTED_STAR = "TIC396792499"
 RUN = None                    # run directory (or name) in runs/<star>/fe_abundance/; None: the newest one
 SHOW_DTEFF = True            # False: leave out the Teff - DTEFF and Teff + DTEFF syntheses
-DTEFF = 300                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
+DTEFF = 100                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
 
 # One more synthesis with any parameters, e.g. the ones of a paper: a dict, or None to leave it out.
 # teff, logg, feh are required; vmic is optional (default: the Fe run's), so is mass (default: the Fe run's; 0.0 =
@@ -48,7 +48,10 @@ DTEFF = 300                   # the two extra syntheses are Teff - DTEFF and Tef
 # abundances are those of the Fe run shifted by feh - [Fe/H] of the run (the same [X/Fe]), A(Fe) = 7.45 + feh.
 
 SHOW_CUSTOM = True
-CUSTOM = dict(label="riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None
+# CUSTOM = dict(label="Riano", teff=4667, logg=1.28, feh=-2.97, vmic=1.4) if SHOW_CUSTOM else None # HD115444
+# CUSTOM = dict(label="Riano", teff=5539, logg=2.44, feh=-1.95, vmic=1.2) if SHOW_CUSTOM else None # HD196944
+# CUSTOM = dict(label="Riano", teff=6565, logg=4.11, feh=-0.21, vmic=1.6) if SHOW_CUSTOM else None # HD2454
+CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
 
 
 LINES = {"H-alpha": 6562.80, "H-beta": 4861.30}    # centres [A]
