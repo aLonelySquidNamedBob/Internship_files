@@ -33,7 +33,7 @@ from fe_line_fit import (C_KMS, RUNS_DIR, SOLAR_FE, AtmosphereSpec, LineSynth, l
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HE22081239"
+SELECTED_STAR = "TIC396792499"
 RUN = None                    # run directory (or name) in runs/<star>/fe_abundance/; None: the newest one
 SHOW_DTEFF = True            # False: leave out the Teff - DTEFF and Teff + DTEFF syntheses
 DTEFF = 100                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
@@ -47,14 +47,14 @@ SHOW_CUSTOM = True
 # CUSTOM = dict(label="Riano", teff=4667, logg=1.28, feh=-2.97, vmic=1.4) if SHOW_CUSTOM else None # HD115444
 # CUSTOM = dict(label="Riano", teff=5539, logg=2.44, feh=-1.95, vmic=1.2) if SHOW_CUSTOM else None # HD196944
 # CUSTOM = dict(label="Riano", teff=6565, logg=4.11, feh=-0.21, vmic=1.6) if SHOW_CUSTOM else None # HD2454
-# CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
-CUSTOM = dict(label="Riano", teff=5200, logg=2.14, feh=-2.40, vmic=0.85) if SHOW_CUSTOM else None # TIC396792499
+CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
+# CUSTOM = dict(label="Riano", teff=5200, logg=2.14, feh=-2.40, vmic=0.85) if SHOW_CUSTOM else None # HE22081239
 
 
 
 LINES = {"H-alpha": 6562.80, "H-beta": 4861.30}    # centres [A]
-HALF_WIDTH = 20.0             # plotted and synthesised range around each line: centre +/- this [A]
-YLIM = (0.80, 1.03)           # flux range of the spectrum panels (the core is cut off to show the wings)
+HALF_WIDTH = 10.0             # plotted and synthesised range around each line: centre +/- this [A]
+YLIM = (0.60, 1.03)           # flux range of the spectrum panels (the core is cut off to show the wings)
 RESID_YLIM = 0.04             # residual panels: +/- this
 
 _FSP = Path(__file__).with_name("find_stellar_parameters")
@@ -147,7 +147,7 @@ def main() -> None:
         fig, (ax, rax) = plt.subplots(2, 1, figsize=(20, 9), sharex=True,
                                       gridspec_kw=dict(height_ratios=[3, 1.3], hspace=0.05))
         sel = np.abs(obs_wl - c) <= HALF_WIDTH
-        ax.plot(obs_wl[sel] - c, obs_fl[sel], ".", ms=2, color="grey", label="observed")
+        ax.plot(obs_wl[sel] - c, obs_fl[sel], "-", ms=2, color="grey", label="observed")
         rax.axhline(0, color="0.3", lw=0.8)
         for m in models:
             wl, fl = synth[(name, m["key"])]

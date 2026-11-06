@@ -135,8 +135,10 @@ TIC396792499:
     raw:
       - null
     normalized:
-      - data/normalized_spectra/TIC396792499_coadd_normalised_resampled.csv
+      # - data/normalized_spectra/TIC396792499_coadd_normalised_resampled.csv
       # - data/normalized_spectra/TIC396792499_coadd_normalised.ssv
+      # - data/normalized_spectra/TIC396792499_coadd_norm_resampled.csv # new lightweight spectrum
+      - data/normalized_spectra/TIC396792499_coadd_norm.csv # new heavy spectrum
     
   synthesis:
     model_atmosphere: "data/interpolated/TIC396792499/derived/s4670_g+1.2_m1.0_t02_st_z-2.21_a+0.40_c+0.00_n+0.00_o+0.40_r+0.00_s+0.00.int"
