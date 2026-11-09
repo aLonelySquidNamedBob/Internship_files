@@ -9,7 +9,8 @@ in nlte_infofile.dat and LineSynth lists the fitted one alone: everything else, 
 depends on the element:
 
   * load_element_config: the star's configuration with the element, its model atom and its line CSV
-    (data/selected_lines/<star>/<el>_kept_lines.csv, same columns as the Fe files; only species and wavelength are needed),
+    (data/selected_lines/<star>/<star>_kept_lines.csv: the lines of every species but Fe in one file, same columns as the
+    Fe files; only species and wavelength are needed),
   * start_abundance: A(X) for the departure coefficients, babsma and the first guess
     (DC_ABUNDANCE, else the reference file, else scaled solar),
   * make_atmosphere: atmosphere + departure coefficients through interp_nlte_4.py, reporting the abundance actually used
@@ -98,7 +99,8 @@ def load_element_config(star: str, element: str, nlte: bool = True) -> StarConfi
     if nlte and not has_dc_grid(element):
         raise SystemExit(f"no departure coefficients for {element}: {DC_GRID / element} needs dc.bin and master.dat")
     changes = dict(element=element, Z=ATOMIC_NUMBER[element], no_fe_linelists=None, strip_fitted_lines=True,
-                   line_file=HOME / "data" / "selected_lines" / star / f"{element.lower()}_kept_lines.csv")
+                   line_file=HOME / "data" / "selected_lines" / star / ("fe_kept_lines.csv" if element == "Fe"
+                                                                        else f"{star}_kept_lines.csv"))
     if entry:
         changes |= dict(model_atom=entry["model_atom"], atom_path=Path(entry["model_atom_path"]))
     return dataclasses.replace(cfg, **changes)
@@ -164,14 +166,16 @@ def make_atmosphere(teff: float, logg: float, feoh: float, element: str, abund: 
                     outdir: Path, nlte: bool = True) -> tuple[AtmosphereSpec, dict]:
     """Interpolate the atmosphere and the departure coefficients of `element` at A(X) = abund with interp_nlte_4.py, in a
     fresh scratch directory. Returns the AtmosphereSpec and what the interpolator reported (its DC_INFO line: the
-    abundance used at each corner, and which corners have nothing within 0.1 dex of A(X)). An LTE run of an element without
-    a grid only needs the atmosphere: it goes through the Fe grid (the Fe departure coefficients are not used)."""
+    abundance used at each corner, and which corners have nothing within 0.1 dex of A(X)). The atmosphere depends on
+    Teff, logg and [Fe/H] only, never on A(X). An LTE run only needs the atmosphere, so it always goes through the Fe grid
+    (the Fe departure coefficients are not used): it does not depend on what the grid of the element covers, and it gets the
+    same atmosphere as the Fe analysis."""
     if mass > 0 and logg > LOGG_MAX_SPHERICAL:
         raise SystemExit(f"logg = {logg} is beyond the spherical MARCS grid (max {LOGG_MAX_SPHERICAL}); "
                          f"use MASS = 0.0 for plane-parallel models")
     outdir.mkdir(parents=True, exist_ok=True)
     grid_element = element
-    if not nlte and not has_dc_grid(element):
+    if not nlte:
         grid_element, abund = "Fe", SOLAR_TS["Fe"] + feoh
     for f in (INTERP_SCRIPT, INTERP_DIR / "interpol_modeles_nlte", MARCS_SPH, MARCS_PPL, DC_GRID / grid_element):
         if not f.exists():

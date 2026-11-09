@@ -11,8 +11,9 @@ part of the recommendation.
 Run it as a plain script: edit the settings below, then `python molecular_list_test.py`.
 
 Everything is taken from the config files:
-    stars.yaml               atmosphere + departure coefficients, metallicity, alpha/Fe, vmic, spectrum,
-                             instrument_fwhm (default -3 km/s), vmac (rad-tan, optional)
+    stars.yaml               atmosphere + departure coefficients, feoh, vmic, spectrum, instrument_fwhm (default
+                             -3 km/s), vmac + vmac_profile (optional); [alpha/Fe], and [Fe/H] when feoh is null,
+                             come from the atmosphere's file name
     line_lists.yaml          the master lists (always included) and the molecular groups that are tested
     reference_abundance.yaml A(X) of the other elements (C, N, O drive the molecules) and isotope_ratios: C12_C13
 Abundances are assembled exactly as in claude_abundance/fe_line_fit.py (reference file, REFERENCE_SCALING,
@@ -75,8 +76,8 @@ ABUNDANCE_OVERRIDES = {              # element: A(X) (log eps, H = 12), or None 
 }
 USE_ISOTOPE_RATIOS = True            # 12C/13C from `isotope_ratios: C12_C13` in reference_abundance.yaml
 
-EXTRA_BROADENING = ('gauss', 6.5)              # None -> `vmac` in stars.yaml if set (rad-tan, faltbon FWHM argument in km/s),
-                                     # else none; or e.g. ("radtan", 5.5) / ("gauss", 8.0) / ("rot", 15.0) (v sin i).
+EXTRA_BROADENING = ('gauss', 6.5)              # None -> `vmac` in stars.yaml if set (faltbon argument in km/s, profile from
+                                     # `vmac_profile`, rad-tan if that is missing), else none; or e.g. ("radtan", 5.5) / ("gauss", 8.0) / ("rot", 15.0) (v sin i).
                                      # Matters: unbroadened molecular features look far deeper than observed ones
 N_JOBS = 12                          # parallel syntheses (one per group + the reference)
 KEEP_SPECTRA = True
@@ -261,8 +262,8 @@ def plot_overview(path: Path, rows: list[dict]) -> None:
 def main() -> None:
     cfg = load_star_config(SELECTED_STAR)
     if cfg.yaml_atm is None or cfg.yaml_dc is None or cfg.feoh is None or cfg.alpha_fe is None:
-        raise SystemExit(f"{SELECTED_STAR}: stars.yaml needs model_atmosphere, departure_coefficients, metallicity "
-                         "and alpha_fe")
+        raise SystemExit(f"{SELECTED_STAR}: stars.yaml needs model_atmosphere and departure_coefficients, with [Fe/H] and "
+                         "[alpha/Fe] in the atmosphere's file name (or feoh / alpha_fe under `synthesis:`)")
     if not USE_REFERENCE_ABUNDANCES:
         cfg.reference_abundances, cfg.reference_notes, cfg.relative_abundances = {}, {}, {}
     cfg.reference_scaling = REFERENCE_SCALING
@@ -272,8 +273,9 @@ def main() -> None:
     abund = individual_abundances(cfg, feoh)
     abund["Fe"] = round(SOLAR_FE + feoh, 4)                  # Fe is not fitted here
     c12_c13 = cfg.c12_c13 if USE_ISOTOPE_RATIOS else None
-    vmac = (cfg.raw.get("synthesis") or {}).get("vmac")
-    extra = EXTRA_BROADENING if EXTRA_BROADENING is not None else (("radtan", float(vmac)) if vmac else None)
+    syn = cfg.raw.get("synthesis") or {}
+    vmac = syn.get("vmac")
+    extra = EXTRA_BROADENING if EXTRA_BROADENING is not None else ((syn.get("vmac_profile") or "radtan", float(vmac)) if vmac else None)
 
     ll_cfg = yaml.safe_load((CONFIG_DIR / "line_lists.yaml").read_text())
     master = [resolve_path(p) for p in ll_cfg["master"]]

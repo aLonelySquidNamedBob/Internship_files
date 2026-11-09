@@ -318,7 +318,7 @@ def load_star_config(star: str) -> StarConfig:
         inst_fwhm=float(spectra.get("instrument_fwhm") or -3.0),   # faltbon convention: <0 means km/s
         yaml_atm=HOME / atm if atm else None,
         yaml_dc=(HOME / dc_dir / dc if dc_dir else HOME / dc) if dc else None,
-        feoh=float(syn["metallicity"]) if syn.get("metallicity") is not None else parsed.get("feoh"),
+        feoh=float(syn["feoh"]) if syn.get("feoh") is not None else parsed.get("feoh"),
         alpha_fe=float(syn["alpha_fe"]) if syn.get("alpha_fe") is not None else parsed.get("alpha_fe"),
         vmic=float(syn.get("vmic") or DEFAULT_VMIC),
         nlte_abundance=float(syn["NLTE_abundance"]) if syn.get("NLTE_abundance") is not None else None,

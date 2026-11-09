@@ -33,7 +33,7 @@ Every decision is saved at once to
 "Keep" only lifts a manual entry: lines rejected by the automatic cuts (chi2, sigma clipping) stay rejected.
 Fit regions are written straight into the star's selected-lines CSV (chi2_left / chi2_right) and take effect in
 the next find_stellar_parameters run; the plot shows the run's region (dashed) and the one in the CSV (blue text).
-For another element the same files are <el>_line_flags.yaml and <el>_kept_lines.csv.
+For another element the same files are <el>_line_flags.yaml and <star>_kept_lines.csv (one file for every species but Fe).
 """
 
 from __future__ import annotations

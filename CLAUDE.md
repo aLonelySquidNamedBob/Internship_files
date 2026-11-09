@@ -14,7 +14,7 @@ git-ignored. Many past commits are PRs from Claude branches, so keep commit mess
 
 | Path | What |
 |---|---|
-| `config/stars.yaml` | One entry per star: spectra (raw/normalized, `rv`, `snr`, `instrument_fwhm`), `synthesis` (model atmosphere `.int`, departure-coefficient file, `NLTE_element`, `NLTE_abundance`, `metallicity`, `alpha_fe`, `vmic`, `vmac`, `teff`, `logg`, `molecular_line_lists`), `notes`. Stars: HD115444, HD196944, HD2454, HE22081239, TIC396792499, SUN. Paths are relative to `~/NICO`. |
+| `config/stars.yaml` | One entry per star: spectra (raw/normalized, `rv`, `snr`, `instrument_fwhm`), `synthesis` (model atmosphere `.int`, departure-coefficient file, `NLTE_element`, `NLTE_abundance`, the converged `teff`, `logg`, `feoh`, `vmic`, `vmac`, `vmac_profile` (`gauss` or `radtan`), `molecular_line_lists`), `notes`. Stars: HD115444, HD196944, HD2454, HE22081239, TIC396792499, SUN. Paths are relative to `~/NICO`. |
 | `config/reference_abundance.yaml` | Published A(X) per star (same keys as stars.yaml): `abundances: {El: {value, error, nlte, note}}` (null = not measured) and `isotope_ratios: C12_C13`. Source: Merle et al. table, a starting point. |
 | `config/nlte.yaml` | NLTE elements: atomic number, model atom name/path, global DC grid (Fe, Ba). |
 | `config/line_lists.yaml` | `master` list (atoms + `DATA/Hlinedata`, always used) and `molecular` groups (CC, CN, CH, NH, OH, MgH, SiH, TiO, ZrO, CaH, FeH, VO), each a list of `ll/molecules/*_GESv5.bsyn` files. |
@@ -27,7 +27,7 @@ git-ignored. Many past commits are PRs from Claude branches, so keep commit mess
 | `data/original/NLTE/` | `interp_nlte_3.py` (+ `_2`, original) and Fortran `interpol_modeles_nlte`, `dc/<El>/` departure-coefficient grid, `MODEL_ATOM/`. `dc/Fe/` is the full grid; `dc/Ba/` holds the zipped full grid (23.9 GB unpacked, do not unzip: the disk cannot take it) plus a small subset (`dc.bin`, `master.dat`, explained in `dc/Ba/README.md`). |
 | `data/interpolated/<star>/` | Interpolated `.int` atmosphere + `*_<El>_<A>_dc.dat` per star. |
 | `data/observed_spectra/<star>/`, `data/normalized_spectra/` | Raw coadds and the normalised CSV/SSV spectra that are fitted. |
-| `data/selected_lines/<star>/` | `fe_kept_lines.csv` (Fe I/II line list with EP, `chi2_left/right` fit-region overrides) and `fe_line_flags.yaml` (`line_id: reason`; "reject..." = excluded). Other elements: `<el>_kept_lines.csv`, `<el>_line_flags.yaml`, same format. |
+| `data/selected_lines/<star>/` | `fe_kept_lines.csv` (Fe I/II line list with EP, `chi2_left/right` fit-region overrides) and `fe_line_flags.yaml` (`line_id: reason`; "reject..." = excluded). Every other species: one file, `<star>_kept_lines.csv` (same format; each run takes the rows of its element), and per element `<el>_line_flags.yaml`. |
 | `Turbospectrum_NLTE_20.1/` | Code + binaries: `exec-gf/{babsma_lu,bsyn_lu}`, `Utilities/faltbon`, `interpolator/`. Don't edit. |
 | `DATA/` | Turbospectrum data tables (Hlinedata, `nlte_infofile.dat`, ...). Scripts link it as `./DATA` in scratch dirs. |
 | `ll` -> `/home/student/GREG/test_tbs20/ll` | Symlink to atomic/molecular line lists (`ll/molecules/*.bsyn`, `nlte_ges_linelist_jmg6may2025_I_II`, GES lists). `line_lists/` and `TiO_ll/` are local copies / extra TiO lists (`ll`'s 47TiO is truncated, so line_lists.yaml points to `TiO_ll/`). |
@@ -72,7 +72,8 @@ All scripts: edit the **Settings block at the top** (`SELECTED_STAR`, parameters
 
 Typical workflow: choose star -> `molecular_list_test.py` to choose molecules -> `find_stellar_parameters` (iterate
 parameters) -> `review_fits.py` (reject blends) -> rerun -> `balmer_wings*.py` to cross-check Teff. Other elements come after
-that: export `<el>_kept_lines.csv`, run `find_element_abundance.py` with the Fe parameters, then `review_fits.py --element <El>`.
+that: put the converged `teff`, `logg`, `feoh`, `vmic`, `vmac` and `vmac_profile` in stars.yaml, export `<star>_kept_lines.csv` (all species but Fe), run
+`find_element_abundance.py` (it reads them from stars.yaml; its settings can override them), then `review_fits.py --element <El>`.
 
 ## Conventions and gotchas
 

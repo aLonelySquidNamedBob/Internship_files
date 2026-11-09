@@ -2,7 +2,8 @@
 """
 A(X) of every selected line of one element in one star, for ONE fixed set of stellar parameters: the element in NLTE,
 every other element (Fe included) in LTE. The counterpart of find_stellar_parameters for elements other than Fe (it also
-works for Fe); take TEFF, LOGG, VMIC, FEH and VMAC from the Fe analysis.
+works for Fe). The converged stellar parameters and the broadening are read from config/stars.yaml; the settings below
+can override them for a run.
 
 Run it as a plain script: edit the settings below, then `python find_element_abundance.py`.
 
@@ -19,8 +20,9 @@ interpolated in abundance: each corner of the interpolation uses the record clos
 printed when that is more than 0.1 dex away (outside the grid, or a gap in it), and a note when the fitted A(X) ends up more than
 0.1 dex from the requested one: set DC_ABUNDANCE to the fitted value and run again.
 
-The lines to fit: data/selected_lines/<star>/<el>_kept_lines.csv, same columns as fe_kept_lines.csv (only `species` and
-`wavelength` are required). Notes on lines: <el>_line_flags.yaml next to it (review_fits.py writes it), as for Fe.
+The lines to fit: the rows of ELEMENT in data/selected_lines/<star>/<star>_kept_lines.csv, one file with the lines of every
+species but Fe (Fe stays in fe_kept_lines.csv), same columns as fe_kept_lines.csv (only `species` and `wavelength` are
+required). Notes on lines: <el>_line_flags.yaml next to it (review_fits.py writes it), as for Fe.
 
 Everything goes to  ~/NICO/runs/<star>/<el>_abundance/<time>_T<teff>_g<logg>_v<vmic>_z<feh>_<NLTE|LTE>/ :
     lines.csv            one row per line (columns as in the Fe runs; other_depth_* = depth of the profile without the element)
@@ -44,9 +46,9 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
-from fe_line_fit import (RUNS_DIR, FitSettings, StarConfig, fit_lines, individual_abundances, is_reject, line_flags_path,
-                         load_line_flags, load_lines, load_spectrum, parse_atm_name, plot_overview, resolve_path,
-                         save_line_flags, write_csv)
+from fe_line_fit import (FALTBON_PROFILE, RUNS_DIR, FitSettings, StarConfig, fit_lines, individual_abundances, is_reject,
+                         line_flags_path, load_line_flags, load_lines, load_spectrum, parse_atm_name, plot_overview,
+                         resolve_path, save_line_flags, write_csv)
 from element_line_fit import (analyze_element, ba_mix, describe_dc, element_totals_text, eu_mix, isotope_fractions,
                               load_element_config, main_ion, make_atmosphere, nlte_level_report,
                               plot_element_diagnostics, print_element_summary, start_abundance)
@@ -58,14 +60,18 @@ from element_line_fit import (analyze_element, ba_mix, describe_dc, element_tota
 SELECTED_STAR = "HD196944"
 ELEMENT = "Ba"
 
-TEFF = 5213                          # K
-LOGG = 1.86                          # dex (cgs)
-VMIC = 1.23                          # km/s
-FEH = -2.29                          # [Fe/H] of the atmosphere, and of the Fe lines (LTE): A(Fe) = 7.45 + FEH
-NLTE = "T"                           # "T" = the element in NLTE (everything else stays LTE), "F" = all LTE
-VMAC = 8.00
+# None = the value under `synthesis:` for the star in config/stars.yaml (teff, logg, vmic, feoh, vmac, vmac_profile); a
+# value here overrides it for this run. A value that is in neither place stops the run.
+TEFF = None                          # K
+LOGG = None                          # dex (cgs)
+VMIC = None                          # km/s
+FEH = None                           # [Fe/H] of the atmosphere, and of the Fe lines (LTE): A(Fe) = 7.45 + FEH
+VMAC = None                          # km/s, the extra broadening: faltbon's argument for VMAC_PROFILE (gauss: the FWHM;
+                                     # radtan: zeta_RT / 1.433). Not needed when fit_broadening=True
+VMAC_PROFILE = None                  # "gauss" or "radtan" (needed even when the broadening is fitted)
+NLTE = "T"                          # "T" = the element in NLTE (everything else stays LTE), "F" = all LTE
 
-MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
+MASS = None                         # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
                                      # 0.0 = plane-parallel)
 DC_ABUNDANCE = None                  # A(X) of the departure coefficients, of babsma and of the first guess; None -> the
                                      # reference file (with REFERENCE_SCALING) or ABUNDANCE_OVERRIDES, else scaled solar
@@ -76,16 +82,14 @@ ISOTOPE_FRACTIONS = {                # fixed isotopic mixtures for bsyn (empty: 
     # "Ba": {135: 0.10, 137: 0.15},  # or per isotope; the isotopes not given keep Turbospectrum's fraction
 }
 RUN_NOTE = ""                        # what is special about this run; goes into summary.yaml
-LINE_FILE = None                     # None -> data/selected_lines/<star>/<el>_kept_lines.csv
+LINE_FILE = None                     # None -> data/selected_lines/<star>/<star>_kept_lines.csv (rows of ELEMENT only)
 ONLY_LINES = None                    # e.g. ["Ba2_4554.0330", "Ba2_6141.7130"]: fit only these (quick checks)
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
     n_jobs=10,
-    half_window=0.8,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
+    half_window=0.6,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
     window_ref_wavelength=5000.0,    # with lambda (constant in km/s). Strong lines (Ba II 4554 and 4934, Mg b, Sr II ...)
                                      # need more: set chi2_left / chi2_right for them in the line CSV (or with review_fits.py)
-    broad_profile="gauss",           # extra broadening done by faltbon: "radtan" or "gauss"
-    fit_broadening=False,            # True: fit it per line (0..broad_max); False: the fixed value below
-    broadening=VMAC,
+    fit_broadening=False,           # True: fit it per line (0..broad_max); False: VMAC / `vmac` of stars.yaml for every line
     broad_max=20.0,
     fit_rv=True,                     # True: fit a small RV shift per line (+/- rv_max, 3 km/s); False: rv_fixed km/s
     rv_fixed=0.0,
@@ -212,8 +216,37 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
 # Main
 # ---------------------------------------------------------------------------
 
+def stellar_parameters(cfg: StarConfig, settings: FitSettings) -> dict[str, float | str]:
+    """TEFF, LOGG, VMIC, FEH, VMAC_PROFILE and VMAC (only when the broadening is not fitted): the setting at the top of
+    this script if there is one, else `synthesis:` of the star in stars.yaml. A value that is in neither stops the run: a
+    default would silently bias the abundances of converged stars."""
+    syn = cfg.raw["synthesis"]
+    wanted = {"TEFF": ("teff", TEFF), "LOGG": ("logg", LOGG), "VMIC": ("vmic", VMIC), "FEH": ("feoh", FEH),
+              "VMAC_PROFILE": ("vmac_profile", VMAC_PROFILE)}
+    if not settings.fit_broadening:
+        wanted["VMAC"] = ("vmac", VMAC)
+    found, missing = {}, []
+    for name, (key, override) in wanted.items():
+        value = syn.get(key) if override is None else override
+        if value is None:
+            missing.append(f"{key} ({name})")
+        else:
+            found[name] = value if name == "VMAC_PROFILE" else float(value)
+            print(f"{name:12s} = {value}  ({'stars.yaml' if override is None else 'override in the settings'})")
+    if missing:
+        raise SystemExit(f"{cfg.star}: no value for {', '.join(missing)}: add it under `synthesis:` in config/stars.yaml, "
+                         "or set it at the top of this script")
+    if found["VMAC_PROFILE"] not in FALTBON_PROFILE:
+        raise SystemExit(f"{cfg.star}: vmac_profile must be one of {list(FALTBON_PROFILE)}, not {found['VMAC_PROFILE']!r}")
+    return found
+
+
 def main() -> None:
     cfg = load_element_config(SELECTED_STAR, ELEMENT, nlte=NLTE == "T")
+    params = stellar_parameters(cfg, FIT_SETTINGS)
+    teff, logg, vmic, feh = params["TEFF"], params["LOGG"], params["VMIC"], params["FEH"]
+    settings = dataclasses.replace(FIT_SETTINGS, broad_profile=params["VMAC_PROFILE"],
+                                   broadening=params.get("VMAC", FIT_SETTINGS.broadening))
     if cfg.spectrum_file is None:
         raise SystemExit(f"{SELECTED_STAR}: no normalized spectrum listed in stars.yaml")
     if LINE_FILE:
@@ -229,23 +262,23 @@ def main() -> None:
     cfg.reference_scaling = REFERENCE_SCALING
     cfg.abundance_overrides = dict(ABUNDANCE_OVERRIDES)
     cfg.isotope_fractions = isotope_fractions(ISOTOPE_FRACTIONS)
-    start = round(start_abundance(cfg, FEH, DC_ABUNDANCE), 2)
+    start = round(start_abundance(cfg, feh, DC_ABUNDANCE), 2)
     print(f"12C/13C: {cfg.c12_c13 if cfg.c12_c13 is not None else 'solar'}")
     if cfg.isotope_fractions:
         print("isotopic fractions: " + "  ".join(f"{k} {v:.4f}" for k, v in cfg.isotope_fractions.items()))
-    print(f"individual abundances (everything else scaled solar for [Fe/H] = {FEH:+.2f}, {ELEMENT} fitted):")
-    for el, a in individual_abundances(cfg, FEH).items():
+    print(f"individual abundances (everything else scaled solar for [Fe/H] = {feh:+.2f}, {ELEMENT} fitted):")
+    for el, a in individual_abundances(cfg, feh).items():
         src = "override" if el in ABUNDANCE_OVERRIDES else cfg.reference_notes.get(el, "")
         print(f"  {el:2s} {a:6.2f}" + (f"  ({src})" if src else ""))
     print(f"starting A({ELEMENT}) = {start:.2f} (departure coefficients, babsma, first guess)")
     mass = MASS if MASS is not None else (parse_atm_name(cfg.yaml_atm.name).get("mass", 1.0) if cfg.yaml_atm else 1.0)
 
-    lines = load_lines(cfg.line_file, required=("wavelength",))
-    others = sorted({r["species"] for r in lines if r["species"].split()[0] != ELEMENT})
-    if others:
-        raise SystemExit(f"{cfg.line_file} holds other species than {ELEMENT}: {others}")
+    in_file = load_lines(cfg.line_file, required=("wavelength",))
+    lines = [r for r in in_file if r["species"].split()[0] == ELEMENT]
+    if not lines:
+        raise SystemExit(f"no {ELEMENT} lines in {cfg.line_file}; species in it: {sorted({r['species'] for r in in_file})}")
     manual = [r["line_id"] for r in lines if r["chi2_left"] is not None]
-    print(f"{len(lines)} total line(s)")
+    print(f"{len(lines)} {ELEMENT} line(s), out of {len(in_file)} in {cfg.line_file.name}")
     print(f"{len(manual)} line(s) with a manual fit region (chi2_left / chi2_right in {cfg.line_file.name})")
     flags_file = resolve_path(LINE_FLAGS_FILE) if LINE_FLAGS_FILE else line_flags_path(cfg)
     flags = load_line_flags(flags_file)
@@ -268,7 +301,7 @@ def main() -> None:
 
     outdir = (RUNS_DIR / SELECTED_STAR / f"{ELEMENT.lower()}_abundance" /
               f"{time.strftime('%Y%m%d_%H%M%S')}_"
-              f"T{TEFF:.0f}_g{LOGG:.2f}_v{VMIC:.2f}_z{FEH:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}")
+              f"T{teff:.0f}_g{logg:.2f}_v{vmic:.2f}_z{feh:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}")
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.yaml").write_text(yaml.dump(cfg.raw))
     here = Path(__file__)
@@ -277,8 +310,8 @@ def main() -> None:
     save_line_flags(outdir / flags_file.name, flags)
 
     print(f"{SELECTED_STAR}: {len(lines)} {ELEMENT} lines, {mode} for {ELEMENT} (LTE for the rest), "
-          f"Teff={TEFF:.0f} logg={LOGG:.2f} vmic={VMIC:.2f} [Fe/H]={FEH:+.2f}\n-> {outdir}")
-    rows, info = run_point(cfg, lines, spectrum, TEFF, LOGG, VMIC, FEH, NLTE, mass, start, outdir, FIT_SETTINGS, flags,
+          f"Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}\n-> {outdir}")
+    rows, info = run_point(cfg, lines, spectrum, teff, logg, vmic, feh, NLTE, mass, start, outdir, settings, flags,
                            note=RUN_NOTE)
     print_element_summary(info)
     for r in rows:

@@ -15,9 +15,11 @@ HD115444:
     NLTE_element: "Fe"
     NLTE_abundance: 4.48
 
-    metallicity: -2.97
-    alpha_fe: 0.40
-    vmic: null # default is 1
+    teff: null
+    logg: null
+    feoh: null
+    vmic: null
+    vmac: null
 
     molecular_line_lists:
       - "CC"
@@ -51,12 +53,12 @@ HD196944:
     NLTE_element: "Fe"
     NLTE_abundance: 5.50
     
-    teff: 5228
-    logg: 1.82
-    metallicity: -2.29
-    alpha_fe: 0.40
-    vmic: 1.45 # default is 1
-    vmac: 5.5 # faltbon input, rad-tan, so vmac is actually 5.5 * 1.443 = 7.9 km/s
+    teff: 5213
+    logg: 1.86
+    feoh: -2.29
+    vmic: 1.23
+    vmac: 8.00
+    vmac_profile: gauss
 
     molecular_line_lists:
       - "CC"
@@ -88,9 +90,11 @@ HD2454:
     NLTE_element: "Fe"
     NLTE_abundance: 7.24
     
-    metallicity: -0.21
-    alpha_fe: 0.08
-    vmic: null # default is 1
+    teff: null
+    logg: null
+    feoh: null
+    vmic: null
+    vmac: null
 
     molecular_line_lists: 
       - "CH"
@@ -114,10 +118,12 @@ HE22081239:
 
     NLTE_element: "Fe"
     NLTE_abundance: 5.05
-    
-    metallicity: -2.40
-    alpha_fe: 0.40
-    vmic: null # default is 1
+
+    teff: null
+    logg: null
+    feoh: null
+    vmic: null
+    vmac: null
 
     molecular_line_lists: 
       - "CC"
@@ -147,10 +153,12 @@ TIC396792499:
 
     NLTE_element: "Fe"
     NLTE_abundance: 5.40
-    
-    metallicity: -2.05
-    alpha_fe: 0.40
-    vmic: null # default is 1
+
+    teff: null
+    logg: null
+    feoh: null
+    vmic: null
+    vmac: null
 
     molecular_line_lists:
       - "CC"
@@ -178,9 +186,11 @@ SUN:
     NLTE_element: "Fe"
     NLTE_abundance: 7.46
 
-    metallicity: 0
-    alpha_fe: 0.40
+    teff: null
+    logg: null
+    feoh: null
     vmic: null
+    vmac: null
 
     molecular_line_lists: 
       - "CC"
