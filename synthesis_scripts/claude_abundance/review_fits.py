@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Click through the line fits of one find_stellar_parameters run and keep, flag or reject each one.
+Click through the line fits of one find_stellar_parameters or find_element_abundance run and keep, flag or reject each one.
 
-    python review_fits.py                         # the latest run of SELECTED_STAR
-    python review_fits.py <run dir>               # a specific run (e.g. a _flagged rerun)
+    python review_fits.py                         # the latest run of SELECTED_STAR, for ELEMENT
+    python review_fits.py --element Ba            # the latest Ba run (find_element_abundance.py) instead
+    python review_fits.py <run dir>               # a specific run (e.g. a _flagged rerun); its element is read from the run
     python review_fits.py --overview [<run dir>]  # no window: (re)write <run dir>/overview.png, all fits in one
                                                   # picture, with the review decisions and current flags marked
                                                   # (for ssh sessions without X; flag lines by editing
@@ -32,11 +33,13 @@ Every decision is saved at once to
 "Keep" only lifts a manual entry: lines rejected by the automatic cuts (chi2, sigma clipping) stay rejected.
 Fit regions are written straight into the star's selected-lines CSV (chi2_left / chi2_right) and take effect in
 the next find_stellar_parameters run; the plot shows the run's region (dashed) and the one in the CSV (blue text).
+For another element the same files are <el>_line_flags.yaml and <el>_kept_lines.csv.
 """
 
 from __future__ import annotations
 
 import csv
+import re
 import sys
 import time
 from pathlib import Path
@@ -48,13 +51,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.
 from fe_line_fit import (RUNS_DIR, cont_text, is_reject, load_line_flags, load_lines, load_star_config,
                          plot_cont_pixels, plot_overview, read_bestfit, read_cont_pixels, save_line_flags,
                          set_line_region, totals_text)
+from element_line_fit import element_totals_text, load_element_config
 
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
 SELECTED_STAR = "HD196944"
-RUN_DIR = None                       # None -> newest run in runs/<star>/fe_abundance/ (a command-line argument wins)
+ELEMENT = "Fe"                       # which runs: runs/<star>/<element>_abundance/ (--element on the command line wins)
+RUN_DIR = None                       # None -> newest run in runs/<star>/<element>_abundance/ (a command-line argument wins)
 REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1-3 (flag)
 
 
@@ -62,11 +67,22 @@ REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun:
 # Files
 # ---------------------------------------------------------------------------
 
-def latest_run(star: str) -> Path:
-    runs = sorted((RUNS_DIR / star / "fe_abundance").glob("*/summary.yaml"), key=lambda p: p.stat().st_mtime)
+def latest_run(star: str, element: str) -> Path:
+    folder = RUNS_DIR / star / f"{element.lower()}_abundance"
+    runs = sorted(folder.glob("*/summary.yaml"), key=lambda p: p.stat().st_mtime)
     if not runs:
-        raise SystemExit(f"no finished runs in {RUNS_DIR / star / 'fe_abundance'}")
+        raise SystemExit(f"no finished runs in {folder}")
     return runs[-1].parent
+
+
+def flags_path_of(line_file: Path, element: str) -> Path:
+    """The manual line flags of an element, next to its selected-lines CSV."""
+    return line_file.with_name(f"{element.lower()}_line_flags.yaml")
+
+
+def read_line_windows(line_file: Path) -> list[dict]:
+    """The selected lines of a run; a CSV of another element need not have every column of the Fe ones."""
+    return load_lines(line_file, required=("wavelength",))
 
 
 def read_rows(run: Path) -> list[dict]:
@@ -96,12 +112,13 @@ class Reviewer:
         self.run = run
         summary = yaml.safe_load((run / "summary.yaml").read_text())
         self.star = summary["star"]
+        self.element = summary.get("element", "Fe")              # runs of find_stellar_parameters do not say
         self.rows = sorted(read_rows(run), key=lambda r: num(r, "wavelength"))
         line_file = Path(summary["line_file"])
         self.line_file = line_file
-        self.windows = {r["line_id"]: (r["fit_left"], r["fit_right"]) for r in load_lines(line_file)}
+        self.windows = {r["line_id"]: (r["fit_left"], r["fit_right"]) for r in read_line_windows(line_file)}
         self.pending: tuple[float, float] | None = None          # region dragged on the plot, not saved yet
-        self.flags_path = line_file.with_name("fe_line_flags.yaml")
+        self.flags_path = flags_path_of(line_file, self.element)
         self.flags0 = load_line_flags(self.flags_path)          # as they were before this session (for undo)
         self.review_path = run / "review.yaml"
         self.review: dict[str, dict] = (yaml.safe_load(self.review_path.read_text()) or {}) \
@@ -195,7 +212,7 @@ class Reviewer:
             self.fig.canvas.draw_idle()
 
     def csv_region(self, lid: str) -> tuple[float, float] | None:
-        row = next((r for r in load_lines(self.line_file) if r["line_id"] == lid), None)
+        row = next((r for r in read_line_windows(self.line_file) if r["line_id"] == lid), None)
         return (row["chi2_left"], row["chi2_right"]) if row and row["chi2_left"] is not None else None
 
     def save_region(self) -> None:
@@ -242,7 +259,8 @@ class Reviewer:
             cpix = read_cont_pixels(fit)
             left, right = self.windows.get(lid, (np.nan, np.nan))
             for a in (self.ax, self.axr):
-                a.axvspan(left, right, color="0.92", zorder=0)
+                if np.isfinite(left) and np.isfinite(right):
+                    a.axvspan(left, right, color="0.92", zorder=0)
                 a.axvline(num(r, "wavelength"), color="0.6", lw=0.8, zorder=0)
                 for bnd in (num(r, "chi2_left"), num(r, "chi2_right")):
                     if np.isfinite(bnd):
@@ -252,10 +270,10 @@ class Reviewer:
                 self.ax.plot(wl[~used], obs[~used], ".", color="0.7", ms=3, label="not in the fit")
             if np.isfinite(band).any():
                 self.ax.fill_between(wl, band[0], band[1], color="tab:red", alpha=0.2, lw=0, zorder=1,
-                                     label=f"A(Fe) +/- {band_off:g}")
+                                     label=f"A({self.element}) +/- {band_off:g}")
             self.ax.plot(wl, mod, "r-", lw=1.2, label="best fit")
             if np.isfinite(nofe).any():
-                self.ax.plot(wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
+                self.ax.plot(wl, nofe, "-", color="tab:cyan", lw=1.1, label=f"no {self.element}")
             plot_cont_pixels(self.ax, wl, obs, cpix, num(r, "cont"), ms=6)
             if cpix is not None:                                  # the same pixels in the residuals
                 res = obs - mod
@@ -279,7 +297,7 @@ class Reviewer:
             if r.get("other_lines_in_window") else ""
         self.header.set_text(
             f"[{self.i + 1}/{len(self.rows)}]  {lid}   EP {num(r, 'ep'):.2f} eV   EW {num(r, 'ew_mA'):.0f} mA   "
-            f"A(Fe) = {num(r, 'A'):.3f} +/- {num(r, 'sigma'):.3f}   misfit {num(r, 'misfit'):.3f}   chi2_red {num(r, 'chi2_red'):.2f}   "
+            f"A({self.element}) = {num(r, 'A'):.3f} +/- {num(r, 'sigma'):.3f}   misfit {num(r, 'misfit'):.3f}   chi2_red {num(r, 'chi2_red'):.2f}   "
             f"broad {num(r, 'broad_kms'):.1f} km/s   RV {num(r, 'dv_kms'):+.2f} km/s   cont {num(r, 'cont'):.3f}\n"
             f"run: {r.get('selection', '?')}{cont_text(r, '   |   ')}   |   NLTE levels: {r.get('nlte_levels', '?')}{others}   |   "
             f"fit region {num(r, 'chi2_left'):.2f}..{num(r, 'chi2_right'):.2f} ({r.get('region_source', 'older run')})")
@@ -312,9 +330,10 @@ def write_overview(run: Path) -> Path:
     """overview.png of a run, marking review decisions and flags set since the run."""
     summary = yaml.safe_load((run / "summary.yaml").read_text())
     line_file = Path(summary["line_file"])
+    element = summary.get("element", "Fe")
     rows = read_rows(run)
     review = (yaml.safe_load((run / "review.yaml").read_text()) or {}) if (run / "review.yaml").exists() else {}
-    flags = load_line_flags(line_file.with_name("fe_line_flags.yaml"))
+    flags = load_line_flags(flags_path_of(line_file, element))
     marks = {}
     for r in rows:
         lid = r["line_id"]
@@ -329,11 +348,14 @@ def write_overview(run: Path) -> Path:
                           else "flag removed since this run")
     mode = "NLTE" if summary.get("nlte") else "LTE"
     path = run / "overview.png"
-    plot_overview(rows, run, path, windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in load_lines(line_file)},
-                  title=f"{summary['star']} {mode}: Teff={summary['teff']:.0f} logg={summary['logg']:.2f} "
+    results = summary["results"]
+    name = f"{summary['star']} {element}" if "element" in summary else summary["star"]
+    plot_overview(rows, run, path, windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in read_line_windows(line_file)},
+                  title=f"{name} {mode}: Teff={summary['teff']:.0f} logg={summary['logg']:.2f} "
                         f"vmic={summary['vmic']:.2f} [Fe/H]={summary['feh_atmosphere']:+.2f}   ({run.name})"
                         + (f"\nnote: {summary['note']}" if summary.get("note") else ""),
-                  marks=marks, totals=totals_text(summary["results"]), fit_settings=summary.get("fit_settings"))
+                  marks=marks, totals=element_totals_text(results) if "ions" in results else totals_text(results),
+                  fit_settings=summary.get("fit_settings"))
     return path
 
 
@@ -343,8 +365,9 @@ def set_region_cli(argv: list[str]) -> None:
     args = argv[i + 1:]
     if len(args) not in (2, 3) or (len(args) == 2 and args[1] != "clear"):
         raise SystemExit("usage: review_fits.py --region <line_id> <left> <right>   or   --region <line_id> clear")
-    cfg = load_star_config(SELECTED_STAR)
     lid = args[0]
+    element = re.match(r"[A-Z][a-z]?", lid)[0]                 # e.g. Ba from Ba2_4554.0330
+    cfg = load_star_config(SELECTED_STAR) if element == "Fe" else load_element_config(SELECTED_STAR, element, nlte=False)
     if args[1] == "clear":
         set_line_region(cfg.line_file, lid, None, None)
         print(f"{lid}: fit region cleared (default window) in {cfg.line_file}")
@@ -359,9 +382,16 @@ def main() -> None:
         set_region_cli(sys.argv)
         return
     args = [a for a in sys.argv[1:] if a != "--overview"]
-    run = Path(args[0]).expanduser() if args else (Path(RUN_DIR) if RUN_DIR else latest_run(SELECTED_STAR))
+    element = ELEMENT
+    if "--element" in args:
+        i = args.index("--element")
+        if i + 1 >= len(args):
+            raise SystemExit("usage: review_fits.py --element <element> (e.g. --element Ba)")
+        element = args[i + 1]
+        del args[i:i + 2]
+    run = Path(args[0]).expanduser() if args else (Path(RUN_DIR) if RUN_DIR else latest_run(SELECTED_STAR, element))
     if not (run / "lines.csv").exists() or not (run / "summary.yaml").exists():
-        raise SystemExit(f"{run} is not a finished find_stellar_parameters run")
+        raise SystemExit(f"{run} is not a finished run")
     if "--overview" in sys.argv:
         print(f"wrote {write_overview(run)}")
         return
