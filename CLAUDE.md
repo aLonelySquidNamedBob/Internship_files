@@ -31,7 +31,7 @@ git-ignored. Many past commits are PRs from Claude branches, so keep commit mess
 | `Turbospectrum_NLTE_20.1/` | Code + binaries: `exec-gf/{babsma_lu,bsyn_lu}`, `Utilities/faltbon`, `interpolator/`. Don't edit. |
 | `DATA/` | Turbospectrum data tables (Hlinedata, `nlte_infofile.dat`, ...). Scripts link it as `./DATA` in scratch dirs. |
 | `ll` -> `/home/student/GREG/test_tbs20/ll` | Symlink to atomic/molecular line lists (`ll/molecules/*.bsyn`, `nlte_ges_linelist_jmg6may2025_I_II`, GES lists). `line_lists/` and `TiO_ll/` are local copies / extra TiO lists (`ll`'s 47TiO is truncated, so line_lists.yaml points to `TiO_ll/`). |
-| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `<el>_abundance` (other elements), `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
+| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `<el>_abundance` (other elements), `synthesis`, `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
 | `log.txt` | Turbospectrum stdout/stderr from the older scripts (13 MB, overwritten). |
 
 ## The main pipeline: `synthesis_scripts/claude_abundance/`
@@ -60,6 +60,10 @@ All scripts: edit the **Settings block at the top** (`SELECTED_STAR`, parameters
 - **`interp_nlte_4.py`** (tracked here, unlike `_3` in `data/`): `interp_nlte_3.py` for any element with a grid. For grids
   with several abundances per model it chooses the closest record per corner itself and gives the Fortran a master file
   with only those. Fe still goes through the old path, with identical output.
+- **`synthesize_region.py`**: one synthesis of a free range (e.g. CH G band, C2 Swan, CN) over the observed spectrum,
+  nothing fitted: chosen A(X) or [X/Fe], 12C/13C, molecule groups, other abundances; stellar parameters and broadening
+  from stars.yaml. Draws an A -/+ offset band, the model without the element, extra ratios/abundances, residuals, and
+  prints chi^2_red / rms per model. Writes `runs/<star>/synthesis/<time>_<El>_<lo>-<hi>/`.
 - **`make_dc_subset.py`**: cuts a small grid out of a zipped one by streaming it, without unzipping. Edit `POINTS`/`MARGIN` to cover new parameters.
 - **`review_fits.py`**: matplotlib GUI to keep/flag/reject each line of a run (writes `review.yaml` and the star's
   `<el>_line_flags.yaml`) and to set per-line chi^2 limits in the line CSV. `--overview` and `--region` are headless modes;
