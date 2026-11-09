@@ -33,7 +33,7 @@ from fe_line_fit import (C_KMS, RUNS_DIR, SOLAR_FE, AtmosphereSpec, LineSynth, l
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "TIC396792499"
+SELECTED_STAR = "HE22081239"
 RUN = None                    # run directory (or name) in runs/<star>/fe_abundance/; None: the newest one
 SHOW_DTEFF = True            # False: leave out the Teff - DTEFF and Teff + DTEFF syntheses
 DTEFF = 100                   # the two extra syntheses are Teff - DTEFF and Teff + DTEFF [K]
@@ -47,8 +47,8 @@ SHOW_CUSTOM = True
 # CUSTOM = dict(label="Riano", teff=4667, logg=1.28, feh=-2.97, vmic=1.4) if SHOW_CUSTOM else None # HD115444
 # CUSTOM = dict(label="Riano", teff=5539, logg=2.44, feh=-1.95, vmic=1.2) if SHOW_CUSTOM else None # HD196944
 # CUSTOM = dict(label="Riano", teff=6565, logg=4.11, feh=-0.21, vmic=1.6) if SHOW_CUSTOM else None # HD2454
-CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
-# CUSTOM = dict(label="Riano", teff=5200, logg=2.14, feh=-2.40, vmic=0.85) if SHOW_CUSTOM else None # HE22081239
+# CUSTOM = dict(label="Riano", teff=4859, logg=1.51, feh=-2.05, vmic=0.98) if SHOW_CUSTOM else None # TIC396792499
+CUSTOM = dict(label="Riano", teff=5200, logg=2.14, feh=-2.40, vmic=0.85) if SHOW_CUSTOM else None # HE22081239
 
 
 

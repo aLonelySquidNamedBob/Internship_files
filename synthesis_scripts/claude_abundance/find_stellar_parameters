@@ -62,12 +62,12 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD196944"
+SELECTED_STAR = "HE22081239"
 
-TEFF = 5213                          # K
-LOGG = 1.86                          # dex (cgs)
-VMIC = 1.23                          # km/s
-FEH = -2.29                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+TEFF = 5000                          # K
+LOGG = 1.50                          # dex (cgs)
+VMIC = 1.30                          # km/s
+FEH = -2.70                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
 VMAC = 8.00
 
