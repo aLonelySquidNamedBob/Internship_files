@@ -24,14 +24,14 @@ git-ignored. Many past commits are PRs from Claude branches, so keep commit mess
 | `synthesis_scripts/abundance/`, `temperature_scripts/`, `sun_template.py` | Older stand-alone scripts that each hard-code the babsma/bsyn/faltbon calls. `abundance_scan_yaml.py` (single-line A(Fe) scan, config-driven) is still useful; `orchestrator.py` is an unfinished sketch; `abundance_scan.py`, `sun_template.py` (Ba, old test dir) are legacy. |
 | `plotting scripts/` | `molecular_lls.py`, `plot_spectra_test.py`: ad hoc plots. |
 | `data/original/atm/` | MARCS grids: `MARCS_st_sph_t02_mod` (spherical, logg <= 3.5), `MARCS_st_ppl_t01_mod` (plane-parallel), `sun_marcs.mod`. |
-| `data/original/NLTE/` | `interp_nlte_3.py` (+ `_2`, original) and Fortran `interpol_modeles_nlte`, `dc/<El>/` departure-coefficient grid, `MODEL_ATOM/`. |
+| `data/original/NLTE/` | `interp_nlte_3.py` (+ `_2`, original) and Fortran `interpol_modeles_nlte`, `dc/<El>/` departure-coefficient grid, `MODEL_ATOM/`. `dc/Fe/` is the full grid; `dc/Ba/` holds the zipped full grid (23.9 GB unpacked, do not unzip: the disk cannot take it) plus a small subset (`dc.bin`, `master.dat`, explained in `dc/Ba/README.md`). |
 | `data/interpolated/<star>/` | Interpolated `.int` atmosphere + `*_<El>_<A>_dc.dat` per star. |
 | `data/observed_spectra/<star>/`, `data/normalized_spectra/` | Raw coadds and the normalised CSV/SSV spectra that are fitted. |
-| `data/selected_lines/<star>/` | `fe_kept_lines.csv` (Fe I/II line list with EP, `chi2_left/right` fit-region overrides) and `fe_line_flags.yaml` (`line_id: reason`; "reject..." = excluded). |
+| `data/selected_lines/<star>/` | `fe_kept_lines.csv` (Fe I/II line list with EP, `chi2_left/right` fit-region overrides) and `fe_line_flags.yaml` (`line_id: reason`; "reject..." = excluded). Other elements: `<el>_kept_lines.csv`, `<el>_line_flags.yaml`, same format. |
 | `Turbospectrum_NLTE_20.1/` | Code + binaries: `exec-gf/{babsma_lu,bsyn_lu}`, `Utilities/faltbon`, `interpolator/`. Don't edit. |
 | `DATA/` | Turbospectrum data tables (Hlinedata, `nlte_infofile.dat`, ...). Scripts link it as `./DATA` in scratch dirs. |
 | `ll` -> `/home/student/GREG/test_tbs20/ll` | Symlink to atomic/molecular line lists (`ll/molecules/*.bsyn`, `nlte_ges_linelist_jmg6may2025_I_II`, GES lists). `line_lists/` and `TiO_ll/` are local copies / extra TiO lists (`ll`'s 47TiO is truncated, so line_lists.yaml points to `TiO_ll/`). |
-| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
+| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `<el>_abundance` (other elements), `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
 | `log.txt` | Turbospectrum stdout/stderr from the older scripts (13 MB, overwritten). |
 
 ## The main pipeline: `synthesis_scripts/claude_abundance/`
@@ -52,8 +52,18 @@ All scripts: edit the **Settings block at the top** (`SELECTED_STAR`, parameters
   `runs/<star>/fe_abundance/<time>_T<teff>_g<logg>_v<vmic>_z<feh>_<NLTE|LTE>/` with `lines.csv`, `summary.yaml`,
   `diagnostics.png`, `overview.png`, `lines/<line>/`, `atm/`, `config.yaml`. Nothing is iterated automatically:
   Teff/logg/vmic are tuned by hand by re-running (excitation balance, ionisation balance, no slope with REW).
+- **`find_element_abundance.py`** + **`element_line_fit.py`**: the same line-by-line fit for any other element: that
+  element in NLTE, everything else (Fe included) in LTE, because `LineSynth` lists only the fitted element in
+  `nlte_infofile.dat`. The fit itself is imported from `fe_line_fit.py` (keep the fitting there, so every element gets it);
+  the library adds the element config, the starting A(X), per-ion results with [X/H] and [X/Fe] on Turbospectrum's
+  solar scale, a read-only report of NLTE levels and fixed isotope fractions (`ba_mix`, `eu_mix`). `MAKE_DIAGNOSTICS` is off by default.
+- **`interp_nlte_4.py`** (tracked here, unlike `_3` in `data/`): `interp_nlte_3.py` for any element with a grid. For grids
+  with several abundances per model it chooses the closest record per corner itself and gives the Fortran a master file
+  with only those. Fe still goes through the old path, with identical output.
+- **`make_dc_subset.py`**: cuts a small grid out of a zipped one by streaming it, without unzipping. Edit `POINTS`/`MARGIN` to cover new parameters.
 - **`review_fits.py`**: matplotlib GUI to keep/flag/reject each line of a run (writes `review.yaml` and the star's
-  `fe_line_flags.yaml`) and to set per-line chi^2 limits in the line CSV. `--overview` and `--region` are headless modes.
+  `<el>_line_flags.yaml`) and to set per-line chi^2 limits in the line CSV. `--overview` and `--region` are headless modes;
+  `--element Ba` picks the newest run of that element.
 - **`balmer_wings.py`**, **`balmer_wings_hlines_only.py`**: synthesise H-alpha / H-beta (full line lists vs H lines
   only) for the newest `fe_abundance` run, Teff +/- 100 K and a CUSTOM literature parameter set; Teff check from Balmer
   wings. They import `find_stellar_parameters` through `SourceFileLoader`.
@@ -61,7 +71,8 @@ All scripts: edit the **Settings block at the top** (`SELECTED_STAR`, parameters
   whose added absorption exceeds `IMPACT_THRESHOLD` for `molecular_line_lists` in stars.yaml.
 
 Typical workflow: choose star -> `molecular_list_test.py` to choose molecules -> `find_stellar_parameters` (iterate
-parameters) -> `review_fits.py` (reject blends) -> rerun -> `balmer_wings*.py` to cross-check Teff.
+parameters) -> `review_fits.py` (reject blends) -> rerun -> `balmer_wings*.py` to cross-check Teff. Other elements come after
+that: export `<el>_kept_lines.csv`, run `find_element_abundance.py` with the Fe parameters, then `review_fits.py --element <El>`.
 
 ## Conventions and gotchas
 
@@ -77,6 +88,10 @@ parameters) -> `review_fits.py` (reject blends) -> rerun -> `balmer_wings*.py` t
   `SPHERICAL_RT = False` even with spherical MARCS (deliberate, matches the old scripts).
 - `-20` as an abundance removes that element's lines (used to isolate Fe lines in the abundance scans).
 - Do not invent NLTE levels (`assign_nlte_levels=False`); lines without levels are handled by the line list.
+- A line is NLTE only if the line list gives both its model-atom levels; "0 0" lines stay LTE in an NLTE run. Coverage in the
+  GES NLTE list varies a lot: Ba II / Eu II isotope blocks, Na, Y are complete, Mg I has 9 of 244 lines (`nlte_levels.csv` of a run shows it).
+- Departure coefficients are not interpolated in abundance: each grid corner uses the record closest to A(X). The Ba grid stops near
+  [Ba/Fe] = +1 and has gaps, so the CEMP-s stars get warnings; a run saves the abundance used per corner in `summary.yaml`.
 - Don't hand-edit anything in `runs/`; each run stores a copy of the scripts and `config.yaml` used.
 - The `stars.yaml` loader accepts both a top-level `stars:` key and bare star keys (currently bare).
 - Hard-coded absolute paths exist in `config/nlte.yaml`, `config/line_lists.yaml` and the older scripts
