@@ -153,6 +153,12 @@ class StarConfig:
     reference_scaling: str = "absolute"                       # "absolute", "fe" or "xfe"
     c12_c13: float | None = None                              # 12C/13C (isotope_ratios: C12_C13); None: solar mix
     abundance_overrides: dict = field(default_factory=dict)   # element -> A(X), or None = scaled solar
+    # set by element_line_fit.py (fits of other elements); the defaults leave the Fe pipeline exactly as it is
+    isotope_fractions: dict = field(default_factory=dict)     # "Z.AAA" (e.g. "56.135") -> isotopic fraction, see isotope_block()
+    babsma_abundance: float | None = None                     # A(fitted element) given to babsma (continuous opacity, electrons);
+                                                              # None: scaled solar, from METALLICITY and ALPHA/Fe
+    strip_fitted_lines: bool = False                          # the no-element profile uses the (trimmed) line lists with every
+                                                              # line of the fitted element removed, see strip_element()
 
 
 def _load_yaml(path: Path) -> dict:
@@ -210,14 +216,20 @@ def load_c12_c13(star: str, path: Path = REFERENCE_ABUNDANCE_FILE) -> float | No
     return float(ratio)
 
 
-def isotope_block(c12_c13: float | None) -> str:
-    """bsyn 'ISOTOPES' block for the carbon isotopes (fractions of 12C and 13C), or '' for Turbospectrum's solar
-    mixture (12C/13C ~ 89). It sets the 12CH/13CH, 12C12C/12C13C/13C13C, 12CN/13CN ... strengths of the molecular
-    line lists; atomic C lines are not affected."""
-    if c12_c13 is None:
+def isotope_block(c12_c13: float | None, fractions: dict[str, float] | None = None) -> str:
+    """bsyn 'ISOTOPES' block, or '' for Turbospectrum's default mixtures (makeabund.f).
+    c12_c13 sets the carbon isotopes (fractions of 12C and 13C; default 12C/13C ~ 89): the 12CH/13CH,
+    12C12C/12C13C/13C13C, 12CN/13CN ... strengths of the molecular line lists; atomic C lines are not affected.
+    `fractions` ("Z.AAA": fraction, e.g. "56.135": 0.0659) sets any other isotope: it scales the lines of the species
+    blocks with that isotope code (e.g. '56.135' in the line list)."""
+    entries = []
+    if c12_c13 is not None:
+        f13 = 1.0 / (1.0 + c12_c13)
+        entries += [f"6.012 {1.0 - f13:.5f}", f"6.013 {f13:.5f}"]
+    entries += [f"{iso} {f:.5f}" for iso, f in (fractions or {}).items()]
+    if not entries:
         return ""
-    f13 = 1.0 / (1.0 + c12_c13)
-    return f"'ISOTOPES : ' '2'\n6.012 {1.0 - f13:.5f}\n6.013 {f13:.5f}\n"
+    return f"'ISOTOPES : ' '{len(entries)}'\n" + "\n".join(entries) + "\n"
 
 
 def individual_abundances(cfg: StarConfig, feoh: float) -> dict[str, float]:
@@ -394,7 +406,7 @@ class LineSynth:
 'HELIUM     :'    '0.00'
 'R-PROCESS  :'    '0.00'
 'S-PROCESS  :'    '0.00'
-{self._individual_abundances()}'XIFIX:' 'T'
+{self._individual_abundances(self.cfg.babsma_abundance)}'XIFIX:' 'T'
 {a.vmic}
 """
 
@@ -415,7 +427,7 @@ class LineSynth:
 'HELIUM     :'    '0.00'
 'R-PROCESS  :'    '0.00'
 'S-PROCESS  :'    '0.00'
-{self._individual_abundances(abu)}{isotope_block(c.c12_c13)}'NFILES   :' '{len(linelists)}'
+{self._individual_abundances(abu)}{isotope_block(c.c12_c13, c.isotope_fractions)}'NFILES   :' '{len(linelists)}'
 """ + "\n".join(str(p) for p in linelists) + f"""
 'SPHERICAL:'  '{"T" if SPHERICAL_RT else "F"}'
   30
@@ -628,18 +640,19 @@ _NUMERIC = ("wavelength", "min_flux", "voigt_fit_depth", "voigt_fit_sigma", "voi
             "voigt_fit_shift", "voigt_fit_area", "fit_left", "fit_right", "excitation_potential")
 
 
-def load_lines(path: Path) -> list[dict]:
-    """The selected-lines CSV as a list of dicts (numbers converted, plus `ion` and `line_id`). The optional
-    columns chi2_left / chi2_right (absolute wavelengths, A) set the fit region of a line by hand; both blank
-    or missing = None = the default region."""
+def load_lines(path: Path, required: tuple[str, ...] = _NUMERIC) -> list[dict]:
+    """The selected-lines CSV as a list of dicts (numbers converted, plus `ion` and `line_id`, e.g. Fe1_4891.4921).
+    The optional columns chi2_left / chi2_right (absolute wavelengths, A) set the fit region of a line by hand; both
+    blank or missing = None = the default region. Numeric columns that are not in `required` are nan when missing
+    or blank."""
     rows = []
     with Path(path).open(newline="") as f:
         for raw in csv.DictReader(f):
             r = {k.strip(): (v or "").strip() for k, v in raw.items() if k}
             for k in _NUMERIC:
-                r[k] = float(r[k])
+                r[k] = float(r[k]) if (k in required or r.get(k)) else np.nan
             r["ion"] = int(r["species"].split()[1])
-            r["line_id"] = f"Fe{r['ion']}_{r['wavelength']:.4f}"
+            r["line_id"] = f"{r['species'].split()[0]}{r['ion']}_{r['wavelength']:.4f}"
             lo, hi = r.get("chi2_left", ""), r.get("chi2_right", "")
             if bool(lo) != bool(hi):
                 raise ValueError(f"{r['line_id']}: give both chi2_left and chi2_right, or neither ({path})")
@@ -674,7 +687,7 @@ def set_line_region(path: Path, line_id: str, lo: float | None, hi: float | None
             for r in rows[1:]:
                 r.append("")
     iw, isp, il, ir = head.index("wavelength"), head.index("species"), head.index("chi2_left"), head.index("chi2_right")
-    hits = [r for r in rows[1:] if r and f"Fe{int(r[isp].split()[1])}_{float(r[iw]):.4f}" == line_id]
+    hits = [r for r in rows[1:] if r and f"{r[isp].split()[0]}{int(r[isp].split()[1])}_{float(r[iw]):.4f}" == line_id]
     if len(hits) != 1:
         raise ValueError(f"{line_id}: found {len(hits)} rows in {path}")
     row = hits[0]
@@ -710,7 +723,7 @@ def line_region(row: dict, s: "FitSettings") -> tuple[float, float, float, float
 
 def line_flags_path(cfg: StarConfig) -> Path:
     """The star's manual line flags (line_id: reason), next to its selected-lines CSV."""
-    return cfg.line_file.with_name("fe_line_flags.yaml")
+    return cfg.line_file.with_name(f"{cfg.element.lower()}_line_flags.yaml")
 
 
 def is_reject(reason: str) -> bool:
@@ -1074,8 +1087,10 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
         import matplotlib.pyplot as plt
     except ImportError:
         return
+    el = str(row["species"]).split()[0]
     fig, ax = plt.subplots(figsize=(7, 3.2))
-    ax.axvspan(row["fit_left"], row["fit_right"], color="0.9", zorder=0)     # line window from the CSV
+    if np.isfinite(row["fit_left"]) and np.isfinite(row["fit_right"]):       # line window from the CSV
+        ax.axvspan(row["fit_left"], row["fit_right"], color="0.9", zorder=0)
     ax.axvline(data.mid, color="0.6", lw=0.8, zorder=0)
     for b in (res["chi2_left"], res["chi2_right"]):                          # the fit region
         ax.axvline(b, color="tab:blue", lw=0.8, ls="--", zorder=0)
@@ -1085,13 +1100,13 @@ def _plot_fit(path: Path, res: dict, data: Data, model: np.ndarray, row: dict, u
     has_band = band is not None and np.isfinite(band).any()
     if has_band:
         ax.fill_between(data.wl, band[0], band[1], color="tab:red", alpha=0.2, lw=0, zorder=1,
-                        label=f"A(Fe) +/- {band_offset:g}")
+                        label=f"A({el}) +/- {band_offset:g}")
     ax.plot(data.wl, model, "r-")
     if nofe is not None and np.isfinite(nofe).any():
-        ax.plot(data.wl, nofe, "-", color="tab:cyan", lw=1.1, label="no Fe")
+        ax.plot(data.wl, nofe, "-", color="tab:cyan", lw=1.1, label=f"no {el}")
     if (~used).any() or (nofe is not None and np.isfinite(nofe).any()) or has_band or has_cont:
         ax.legend(fontsize=7, loc="lower left")
-    ax.set_title(f"{res['line_id']}  A(Fe)={res['A']:.2f}+/-{res['sigma']:.2f}  chi2r={res['chi2_red']:.1f}  "
+    ax.set_title(f"{res['line_id']}  A({el})={res['A']:.2f}+/-{res['sigma']:.2f}  chi2r={res['chi2_red']:.1f}  "
                  f"broad={res['broad_kms']:.1f} km/s" + cont_text(res, "\n"), fontsize=9)
     ax.set_xlabel("Wavelength [A]")
     fig.tight_layout()
@@ -1167,9 +1182,12 @@ def is_hydrogen_linelist(path: Path) -> bool:
 
 
 def no_fe_method(s: "FitSettings", cfg: StarConfig) -> str:
-    """The no-Fe profile method actually used: "linelist" or "abundance" (resolves "auto")."""
+    """The no-Fe profile method actually used: "linelist" or "abundance" (resolves "auto"). With
+    cfg.strip_fitted_lines the "line list without the element" is built per line (strip_element), for any element."""
     if s.no_fe_method not in ("auto", "linelist", "abundance"):
         raise ValueError(f"no_fe_method must be auto, linelist or abundance, not {s.no_fe_method!r}")
+    if cfg.strip_fitted_lines and s.no_fe_method != "abundance":
+        return "linelist"
     if s.no_fe_method == "linelist" and not cfg.no_fe_linelists:
         raise ValueError("no_fe_method='linelist' but line_lists.yaml has no `no_Fe` entry")
     if s.no_fe_method == "auto":
@@ -1237,6 +1255,26 @@ def trim_linelists(paths: list[Path], lo: float, hi: float, outdir: Path) -> lis
     return out_paths
 
 
+def strip_element(paths: list[Path], z: int, outdir: Path) -> list[Path]:
+    """Copies of Turbospectrum line lists without any atomic line of the element with atomic number z: all its ions
+    and isotopes (species z.000, z.135, ...). Molecules are kept, a file left empty is dropped and lists that start
+    with hydrogen are passed through untouched."""
+    out_paths = []
+    for path in paths:
+        if not is_metal_linelist(path):
+            out_paths.append(Path(path))
+            continue
+        out = []
+        for header, name, data in read_linelist_blocks(path):
+            if int(float(_LL_HEADER.match(header)[1])) != z:
+                out += [header, name, *data]
+        if out:
+            dst = outdir / f"ll_{len(out_paths):02d}_{Path(path).name}"
+            dst.write_text("".join(out))
+            out_paths.append(dst)
+    return out_paths
+
+
 def fit_one_line(job: dict) -> dict:
     """Worker: one line, own scratch directory. Never raises; failures go into `status`."""
     row, s = job["line"], job["settings"]
@@ -1270,6 +1308,10 @@ def fit_one_line(job: dict) -> dict:
                 nofe_dir.mkdir()
                 cfg = dataclasses.replace(cfg, no_fe_linelists=trim_linelists(cfg.no_fe_linelists, t_lo, t_hi,
                                                                               nofe_dir))
+        if cfg.strip_fitted_lines and s.no_fe_profile and no_fe_method(s, cfg) == "linelist":
+            strip_dir = workdir / "ll_no_element"
+            strip_dir.mkdir()
+            cfg = dataclasses.replace(cfg, no_fe_linelists=strip_element(cfg.linelists, cfg.Z, strip_dir))
         synth = LineSynth(cfg, job["atm"], win_lo - s.synth_pad, win_hi + s.synth_pad, workdir, workdir / "log.txt")
         region = (data.wl >= job["fit_lo"]) & (data.wl <= job["fit_hi"])
         fitter = LineFitter(synth, data, job["nlte"], s, job["fixed_broad"], region)
@@ -1285,8 +1327,8 @@ def fit_one_line(job: dict) -> dict:
         np.savetxt(outdir / "bestfit.csv",
                    np.column_stack([data.wl, data.fl, model, used.astype(int), nofe, *band, cont_pixel]),
                    delimiter=",", comments="",
-                   header=f"wavelength,flux_obs,flux_model,used_in_fit,flux_noFe,flux_A-{off:.3f},flux_A+{off:.3f},"
-                          "cont_pixel",
+                   header=f"wavelength,flux_obs,flux_model,used_in_fit,flux_no{str(row['species']).split()[0]},"
+                          f"flux_A-{off:.3f},flux_A+{off:.3f},cont_pixel",
                    fmt=["%.4f", "%.6f", "%.6f", "%d", "%.6f", "%.6f", "%.6f", "%d"])
         if s.make_plots:
             _plot_fit(outdir / "fit.png", res, data, model, row, used, nofe, band, off, cont_pixel)
@@ -1429,11 +1471,14 @@ def assign_nlte_levels(cfg: StarConfig, lines: list[dict], workdir: Path) -> tup
 def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
               spectrum: tuple[np.ndarray, np.ndarray], outdir: Path, *,
               a_guess: dict[str, float] | None = None, broadening: float | None = None,
-              settings: FitSettings | None = None, nlte: str = "T") -> list[dict]:
+              settings: FitSettings | None = None, nlte: str = "T", default_abundance: float | None = None,
+              levels: dict[str, dict] | None = None) -> list[dict]:
     """Fit all lines in parallel; returns one dict per line, sorted by wavelength (also written to
     lines.csv). `a_guess` maps line_id -> starting A(Fe) (warm start); `broadening` (km/s) fixes the
     extra broadening for every line and overrides the settings; None follows settings.fit_broadening /
-    settings.broadening."""
+    settings.broadening. `default_abundance`: first guess for the lines not in a_guess (None: 7.45 + [Fe/H] of the
+    atmosphere). `levels`: line_id -> {levels_used, how}, what goes into the `nlte_levels` column of an NLTE run
+    (replaced by the assignment when settings.assign_nlte_levels is on)."""
     s = settings or FitSettings()
     if broadening is None and not s.fit_broadening:
         broadening = s.broadening                 # fixed for every line
@@ -1442,15 +1487,19 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     obs_wl, obs_fl = spectrum
-    a_default = SOLAR_FE + atm.feoh
+    a_default = SOLAR_FE + atm.feoh if default_abundance is None else default_abundance
     a_guess = a_guess or {}
     if s.no_fe_profile:                           # fail here, not in every worker, on a bad setting
-        method = no_fe_method(s, cfg)
-        print("no-Fe profile: " + (f"line list without Fe ({', '.join(Path(p).name for p in cfg.no_fe_linelists)})"
-                                   if method == "linelist" else f"A(Fe) = {s.no_fe_abundance} with the full line lists"))
+        method, el = no_fe_method(s, cfg), cfg.element
+        if method == "linelist" and cfg.strip_fitted_lines:
+            print(f"no-{el} profile: line lists with every atomic {el} line removed (all ions and isotopes)")
+        else:
+            print(f"no-{el} profile: " + (f"line list without {el} ({', '.join(Path(p).name for p in cfg.no_fe_linelists)})"
+                                          if method == "linelist"
+                                          else f"A({el}) = {s.no_fe_abundance} with the full line lists"))
 
     ll_dir = Path(tempfile.mkdtemp(prefix="ll_", dir=SCRATCH_DIR))
-    levels: dict[str, dict] = {}
+    levels = dict(levels or {})
     if nlte == "T" and s.assign_nlte_levels:
         paths, levels = assign_nlte_levels(cfg, lines, ll_dir)
         cfg = dataclasses.replace(cfg, linelists=paths)
@@ -1770,6 +1819,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
     except ImportError:
         return
     rows = sorted(rows, key=lambda r: float(r["wavelength"]))
+    el = str(rows[0].get("species", "Fe")).split()[0] if rows else "Fe"
     windows, marks = windows or {}, marks or {}
     nrows = -(-len(rows) // ncols)
     head = 1.55                                           # inches for the figure title above the first row
@@ -1799,7 +1849,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
             cpix = read_cont_pixels(fit)
             lo, hi = min(obs.min(), mod.min(), np.nanmin(band, initial=np.inf)), max(obs.max(), mod.max())
             base = lo - 0.12 * (hi - lo) - 0.02
-            if lid in windows:
+            if lid in windows and np.isfinite(windows[lid]).all():
                 ax.axvspan(*windows[lid], color="0.92", zorder=0)
             ax.axvline(f(r, "wavelength"), color="0.7", lw=0.6, zorder=0)
             for b in (f(r, "chi2_left"), f(r, "chi2_right")):
@@ -1854,8 +1904,8 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
     for ax in list(axes.flat)[len(rows):]:
         ax.axis("off")
     fig.suptitle(f"{title}\n{totals}\npanel colour: black used, grey sigma-clipped, red rejected "
-                 "(quality cuts or by hand);  orange text: flagged by hand (still used);  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-Fe profile;  "
-                 + (f"red band: A(Fe) +/- {fs['abund_band_offset']:g} dex;  " if fs.get("abund_band") else "") +
+                 f"(quality cuts or by hand);  orange text: flagged by hand (still used);  grey band: fit_left..fit_right;  dashed: fit region;  light grey points: outside it;  cyan: no-{el} profile;  "
+                 + (f"red band: A({el}) +/- {fs['abund_band_offset']:g} dex;  " if fs.get("abund_band") else "") +
                  "bottom trace: obs - fit;  green rings: continuum pixels (median_clip), orange crosses: clipped;  "
                  "black line: c\n"
                  f"per panel: RV shift [km/s], b = extra broadening [km/s, faltbon {profile or 'FWHM'} argument], c = continuum "
