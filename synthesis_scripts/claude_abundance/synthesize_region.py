@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-One synthesis of a free wavelength range with chosen inputs, drawn over the observed spectrum. Nothing is fitted.
-Meant for molecular bands (CH G band, C2 Swan, CN) and A(C), 12C/13C, but works for any element and range.
+Synthesis of a free wavelength range with chosen inputs, drawn over the observed spectrum, and optionally a chi^2 fit of
+it (MODE = "fit"). Meant for molecular bands (CH G band, C2 Swan, CN) and A(C), 12C/13C, but works for any element and range.
 
 Run it as a plain script: edit the settings below, then `python synthesize_region.py`.
 
@@ -18,13 +18,33 @@ Drawn (each one bsyn run, in parallel):
     extra ratios     the nominal A at other 12C/13C                   (EXTRA_RATIOS)
     extra abundances the nominal model at other A(ELEMENT)            (EXTRA_ABUNDANCES)
 babsma runs at the nominal A(ELEMENT) for all of them (continuous opacity and equation of state). The residual panel shows
-observed - model; chi^2_red and rms of each model over RANGE minus EXCLUDE are printed and written to summary.yaml, to
-compare models by number, not only by eye. chi^2 uses sigma = 1/SNR of stars.yaml.
+observed - model; chi^2_red and rms of each model over the chi^2 pixels (RANGE, or INCLUDE, minus EXCLUDE) are printed and
+written to summary.yaml, to compare models by number, not only by eye. chi^2 uses sigma = 1/SNR of stars.yaml.
 
-Output: runs/<star>/synthesis/<time>_<ELEMENT>_<lo>-<hi>/
+MODE = "fit": the same pixels are fitted with LineFitter of fe_line_fit.py (the fit of the Fe lines, over the whole range
+here). FIT chooses what is free:
+    abundance   A(ELEMENT): 1-D search from the nominal value, parabola at the minimum; sigma from its curvature, scaled by
+                sqrt(chi2_red) when chi2_red > 1. Over a band chi2_red is dominated by line-list errors, so sigma is a fit
+                error only: rerun at Teff, logg, O +/- their errors and over sub-ranges for the real uncertainty
+    c12_c13     12C/13C: one full fit per value of RATIO_GRID (in parallel), a parabola in chi^2 against log10(12C/13C)
+                through the best grid point and its neighbours, then a final fit at the best ratio. chi^2 is not a
+                parabola in log(ratio) over a coarse grid: for the final value rerun with a finer RATIO_GRID around it
+                (in a mock test, 3..60 gave 9.0 +/- 0.35 for a true 8)
+    rv          an RV shift within +/- RV_MAX km/s on top of RV_SHIFT
+    broadening  the extra broadening within 0..BROAD_MAX (else VMAC). Better fixed from the Fe lines
+    continuum   continuum scale (CONT_ORDER 0) or scale + slope (1) with a Gaussian prior CONT_PRIOR around CONT_SCALE...
+                In a CEMP G band there is hardly any continuum and a free continuum trades against A(C): keep it fixed
+                unless the normalisation is clearly off
+The drawn models are then the best fit (as "nominal"), its -/+ BAND_OFFSET band, without ELEMENT and EXTRA_ABUNDANCES, all
+with the fitted RV, broadening and continuum (EXTRA_RATIOS are synth mode only). babsma stays at the starting A(ELEMENT):
+when the fit ends more than BABSMA_WARN dex away the script says so; rerun with A_X = the result.
+
+Output: runs/<star>/synthesis/<time>_<ELEMENT>_<lo>-<hi>[_fit]/
     region.png      observed, models, band, residuals (the range split into rows of PANEL_WIDTH)
     synth.csv       observed and every model on the observed pixels (after RV shift, broadening, CONT_SCALE)
-    summary.yaml    inputs, abundances given to Turbospectrum, chi^2_red / rms per model
+    summary.yaml    inputs, abundances given to Turbospectrum, chi^2_red / rms per model, fit results
+    chi2_curve.csv  fit mode: chi^2, RV, broadening, continuum at every trial A(ELEMENT) of the final fit
+    chi2_ratio.csv, chi2_ratio.png   fit mode with c12_c13 free: the fit at each RATIO_GRID value
     atm/            the interpolated atmosphere; copies of the scripts used
 """
 
@@ -43,8 +63,9 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
-from fe_line_fit import (C_KMS, CONFIG_DIR, FALTBON_PROFILE, RUNS_DIR, SCRATCH_DIR, LineSynth, individual_abundances,
-                         load_spectrum, parse_atm_name, resolve_path, trim_linelists)
+from fe_line_fit import (C_KMS, CONFIG_DIR, FALTBON_PROFILE, RUNS_DIR, SCRATCH_DIR, Data, FitSettings, LineFitter,
+                         LineSynth, individual_abundances, load_spectrum, parse_atm_name, resolve_path, trim_linelists,
+                         write_csv)
 from element_line_fit import SOLAR_TS, load_element_config, make_atmosphere, start_abundance
 
 # ---------------------------------------------------------------------------
@@ -86,7 +107,20 @@ BAND_OFFSET = 0.2             # dex; None or 0: no band
 SHOW_WITHOUT = True           # also the model without ELEMENT
 EXTRA_RATIOS = []             # e.g. [4, 20]: more 12C/13C at the nominal A(ELEMENT)
 EXTRA_ABUNDANCES = []         # e.g. [7.0, 7.8]: more A(ELEMENT) at the nominal 12C/13C
-EXCLUDE = []                  # [(lo, hi), ...] left out of chi^2 / rms (shaded in the plot), e.g. a bad pixel or Mg b
+EXCLUDE = []                  # [(lo, hi), ...] left out of chi^2 / rms and of the fit (shaded), e.g. a bad pixel or Mg b
+INCLUDE = None                # None: all of RANGE in chi^2; else only these [(lo, hi), ...] (minus EXCLUDE), e.g. the
+                              # weaker, unsaturated part of a band. The plot still shows all of RANGE
+
+MODE = "synth"                # "synth": the models above, nothing fitted; "fit": fit the chi^2 pixels (see the top)
+FIT = dict(abundance=True, c12_c13=False, rv=True, broadening=False, continuum=False)   # what the fit varies
+RATIO_GRID = (3, 5, 8, 12, 20, 35, 60)   # 12C/13C values when c12_c13 is free
+A_HALF_RANGE = 1.5            # A(ELEMENT) is confined to the starting value +/- this
+RV_MAX = 3.0                  # km/s, limit of the fitted RV shift
+BROAD_MAX = 20.0              # km/s, upper limit of the fitted broadening
+CONT_ORDER = 0                # fitted continuum: 0 scale, 1 scale + slope over RANGE
+CONT_PRIOR = 0.02             # sigma of the Gaussian prior on the fitted continuum (<= 0: free)
+MAX_SYNTH = 20                # cap on bsyn runs per abundance search (per ratio)
+BABSMA_WARN = 0.3             # dex: warn when the fitted A(ELEMENT) is this far from the babsma value
 
 N_JOBS = 8                    # parallel syntheses (each runs babsma + bsyn over the whole range)
 SYNTH_PAD = 2.0               # synthesis extends this far beyond RANGE [A] (RV shift, broadening kernel)
@@ -117,6 +151,101 @@ def synth_one(job: dict) -> tuple[np.ndarray, np.ndarray]:
         raise RuntimeError(f"{job['key']}: {exc}\n--- Turbospectrum log (tail) ---\n{tail}") from None
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def fit_one(job: dict) -> dict:
+    """Worker, fit mode: the fit at one 12C/13C (job["ratio"]). With job["extras"] also the models for the plot, all on the
+    observed pixels with the fitted RV shift, broadening and continuum."""
+    workdir = Path(tempfile.mkdtemp(prefix="regfit_", dir=SCRATCH_DIR))
+    try:
+        cfg = dataclasses.replace(job["cfg"], c12_c13=job["ratio"])
+        synth = LineSynth(cfg, job["atm"], job["wmin"], job["wmax"], workdir, workdir / "log.txt")
+        s, region = job["settings"], job["region"]
+        fitter = LineFitter(synth, job["data"], job["nlte"], s, job["fixed_broad"], region)
+        if not s.fit_continuum:
+            fitter.scale = job["cont_scale"]               # the fixed continuum
+        a0 = job["a0"]
+        if job["fit_abundance"]:
+            out = fitter.run(a0, warm=False)
+            a_best, sigma, stop, at_boundary = float(out["A"]), float(out["sigma"]), out["stop_reason"], bool(out["at_boundary"])
+        else:
+            a_best, sigma, stop, at_boundary = a0, float("nan"), "fixed", False
+        a_best = round(a_best, 4)
+        ev = fitter.at(a_best)                              # chi^2 and nuisance parameters at the result itself
+        n_free = int(job["fit_abundance"]) + fitter.n_free + (s.cont_order + 1 if s.fit_continuum else 0)
+        dof = max(int(region.sum()) - n_free, 1)
+        res = dict(ratio=job["ratio"], A=a_best, sigma=round(sigma, 4), chi2=float(ev["chi2"]),
+                   chi2_red=float(ev["chi2"]) / dof, dof=dof, dv_kms=round(float(ev["dv"]), 3),
+                   broad_kms=round(float(ev["broad"]), 3), cont=[round(float(c), 5) for c in ev["coef"]],
+                   stop_reason=stop, at_boundary=at_boundary, n_synth=synth.n_runs,
+                   evals=[dict(A=a, chi2=e["chi2"], dv_kms=e["dv"], broad_kms=e["broad"], cont=e["cont"])
+                          for a, e in sorted(fitter.evals.items())])
+        if job["extras"]:
+            flux = {"nominal": fitter.model_full(a_best, ev)}
+            off = job["band_offset"]
+            if off:
+                flux["band-"] = fitter.model_full(round(a_best - off, 4), ev)
+                flux["band+"] = fitter.model_full(round(a_best + off, 4), ev)
+            if job["show_without"]:
+                flux["without"] = fitter.model_full(WITHOUT, ev)
+            for a in job["extra_abundances"]:
+                flux[f"A {a:.2f}"] = fitter.model_full(round(float(a), 4), ev)
+            res["flux"] = flux
+        return res
+    except Exception as exc:
+        log = workdir / "log.txt"
+        tail = "".join(log.read_text(errors="replace").splitlines(True)[-40:]) if log.exists() else ""
+        raise RuntimeError(f"fit at 12C/13C = {job['ratio']}: {exc}\n--- Turbospectrum log (tail) ---\n{tail}") from None
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def best_ratio(fits: list[dict]) -> dict:
+    """12C/13C from the fits on RATIO_GRID: parabola in chi^2 against x = log10(ratio) through the best grid point and its
+    neighbours; 1 sigma where chi^2 rises by max(chi2_red, 1) (the same scaling as sigma(A)). At an end of the grid, or
+    when the three points are not convex, the best grid point is returned with a note and no error."""
+    fits = sorted(fits, key=lambda f: f["ratio"])
+    x = np.log10([f["ratio"] for f in fits])
+    y = np.array([f["chi2"] for f in fits])
+    i = int(np.argmin(y))
+    out = dict(ratio=float(fits[i]["ratio"]), ratio_lo=None, ratio_hi=None, ratio_note="best grid point")
+    if i in (0, len(fits) - 1):
+        out["ratio_note"] = f"at the {'lower' if i == 0 else 'upper'} end of RATIO_GRID: extend the grid"
+        return out
+    c2, c1, _ = np.polyfit(x[i - 1:i + 2], y[i - 1:i + 2], 2)
+    if c2 <= 0:
+        out["ratio_note"] = "chi^2 not convex around the best grid point"
+        return out
+    xb = -c1 / (2 * c2)
+    sx = math.sqrt(max(fits[i]["chi2_red"], 1.0) / c2)
+    out.update(ratio=round(float(10 ** xb), 3), ratio_lo=round(float(10 ** (xb - sx)), 3),
+               ratio_hi=round(float(10 ** (xb + sx)), 3), ratio_note="parabola in log10(12C/13C)")
+    return out
+
+
+def plot_ratio_curve(path: Path, fits: list[dict], best: dict, title: str) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fits = sorted(fits, key=lambda f: f["ratio"])
+    r = np.array([f["ratio"] for f in fits], float)
+    c = np.array([f["chi2"] for f in fits], float)
+    fig, (ax, bx) = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
+    ax.plot(r, c - c.min(), "o-", color="black")
+    bx.plot(r, [f["A"] for f in fits], "o-", color="tab:blue")
+    for axx in (ax, bx):
+        axx.axvline(best["ratio"], color="tab:red", lw=1)
+        if best["ratio_lo"] is not None:
+            axx.axvspan(best["ratio_lo"], best["ratio_hi"], color="tab:red", alpha=0.12, lw=0)
+        axx.grid(alpha=0.3)
+    ax.set_xscale("log")
+    ax.set_ylabel("χ² − χ²_min")
+    bx.set_ylabel(f"best A({ELEMENT})")
+    bx.set_xlabel("¹²C/¹³C")
+    ax.set_title(title, fontsize=9, loc="left")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +309,42 @@ def plot_region(path: Path, wl: np.ndarray, obs: np.ndarray, curves: list[dict],
 # Main
 # ---------------------------------------------------------------------------
 
+def run_fit(common: dict, wl: np.ndarray, fl: np.ndarray, used: np.ndarray, a0: float, broad: float, profile: str,
+            snr: float, ratio0: float | None, off: float) -> tuple[dict, list[dict], dict]:
+    """MODE = "fit": (result of the final fit, the fits on RATIO_GRID (empty when the ratio is fixed), the drawn models)."""
+    lo, hi = RANGE
+    s = FitSettings(n_jobs=1, fit_rv=FIT["rv"], rv_max=RV_MAX, rv_fixed=0.0, broad_profile=profile,
+                    fit_broadening=FIT["broadening"], broadening=broad, broad_max=BROAD_MAX,
+                    fit_continuum=FIT["continuum"], cont_order=CONT_ORDER, cont_prior=CONT_PRIOR, cont_method="lsq",
+                    no_fe_profile=False, abund_band=False, trim_linelists=False, keep_synth=False, make_plots=False,
+                    a_half_range=A_HALF_RANGE, max_synth=MAX_SYNTH, a_tol=0.005, a_local=0.05)
+    if CONT_SCALE != 1.0 and FIT["continuum"]:
+        print("note: CONT_SCALE is ignored when the continuum is fitted (its prior is centred on 1)")
+    data = Data((lo + hi) / 2, (hi - lo) / 2, wl, fl, np.full(len(wl), 1.0 / snr))
+    job = dict(common, settings=s, data=data, region=used, fixed_broad=None if FIT["broadening"] else broad, a0=a0,
+               fit_abundance=FIT["abundance"], cont_scale=CONT_SCALE, band_offset=off, show_without=SHOW_WITHOUT,
+               extra_abundances=list(EXTRA_ABUNDANCES))
+    ratio_fits, info, ratio = [], {}, ratio0
+    if FIT["c12_c13"]:
+        jobs = [dict(job, ratio=float(r), extras=False) for r in RATIO_GRID]
+        print(f"fitting at {len(jobs)} values of 12C/13C over {hi - lo + 2 * SYNTH_PAD:.1f} A ...")
+        with ProcessPoolExecutor(max_workers=max(1, min(len(jobs), N_JOBS))) as ex:
+            ratio_fits = list(ex.map(fit_one, jobs))
+        for f in sorted(ratio_fits, key=lambda f: f["ratio"]):
+            print(f"  12C/13C = {f['ratio']:6g}:  A({ELEMENT}) = {f['A']:.3f}  chi2_red = {f['chi2_red']:.3f}  "
+                  f"[{f['stop_reason']}]")
+            f.pop("evals")
+        info = best_ratio(ratio_fits)
+        ratio = info["ratio"]
+    print("final fit" + (f" at 12C/13C = {ratio:g}" if ratio is not None else "") + " ...")
+    if ratio_fits:                                         # start from the best grid point's A
+        job["a0"] = min(ratio_fits, key=lambda f: f["chi2"])["A"]
+    fit = fit_one(dict(job, ratio=ratio, extras=True))
+    flux = fit.pop("flux")
+    fit |= info
+    return fit, ratio_fits, flux
+
+
 def stellar_parameters(cfg) -> dict:
     """TEFF, LOGG, VMIC, FEH, VMAC, VMAC_PROFILE: the setting here if given, else `synthesis:` in stars.yaml."""
     syn = cfg.raw["synthesis"]
@@ -204,6 +369,16 @@ def main() -> None:
     lo, hi = map(float, RANGE)
     if hi <= lo:
         raise SystemExit(f"RANGE must be (lo, hi) with lo < hi, not {RANGE}")
+    if MODE not in ("synth", "fit"):
+        raise SystemExit(f"MODE must be 'synth' or 'fit', not {MODE!r}")
+    if set(FIT) != {"abundance", "c12_c13", "rv", "broadening", "continuum"}:
+        raise SystemExit(f"FIT needs exactly the keys abundance, c12_c13, rv, broadening, continuum (has {list(FIT)})")
+    if MODE == "fit" and not any(FIT.values()):
+        raise SystemExit("MODE = 'fit' but nothing in FIT is free")
+    if MODE == "fit" and EXTRA_RATIOS:
+        print("note: EXTRA_RATIOS are only drawn in synth mode")
+    if MODE == "fit" and FIT["c12_c13"] and (len(RATIO_GRID) < 3 or min(RATIO_GRID) <= 0):
+        raise SystemExit("RATIO_GRID needs at least 3 positive values")
     cfg = load_element_config(SELECTED_STAR, ELEMENT, nlte=NLTE == "T")
     if cfg.spectrum_file is None:
         raise SystemExit(f"{SELECTED_STAR}: no normalized spectrum listed in stars.yaml")
@@ -245,7 +420,7 @@ def main() -> None:
         return a - SOLAR_TS[ELEMENT] - feh
 
     mode = "NLTE" if NLTE == "T" else "LTE"
-    tag = f"{time.strftime('%Y%m%d_%H%M%S')}_{ELEMENT}_{lo:.0f}-{hi:.0f}"
+    tag = f"{time.strftime('%Y%m%d_%H%M%S')}_{ELEMENT}_{lo:.0f}-{hi:.0f}" + ("_fit" if MODE == "fit" else "")
     outdir = RUNS_DIR / SELECTED_STAR / "synthesis" / tag
     outdir.mkdir(parents=True)
     here = Path(__file__)
@@ -272,8 +447,14 @@ def main() -> None:
                          f"({obs_wl.min():.1f}-{obs_wl.max():.1f} A)")
     wl, fl = obs_wl[sel], obs_fl[sel]
     used = np.ones(len(wl), bool)
+    if INCLUDE:
+        used[:] = False
+        for a, b in INCLUDE:
+            used |= (wl >= a) & (wl <= b)
     for a, b in EXCLUDE:
         used &= ~((wl >= a) & (wl <= b))
+    if used.sum() < 10:
+        raise SystemExit(f"only {used.sum()} pixels left for chi^2: check INCLUDE / EXCLUDE")
 
     # the models
     off = float(BAND_OFFSET or 0.0)
@@ -290,14 +471,38 @@ def main() -> None:
     try:
         cfg = dataclasses.replace(cfg, linelists=trim_linelists(cfg.linelists, lo - SYNTH_PAD - 10, hi + SYNTH_PAD + 10,
                                                                 trim_dir))
-        jobs = [dict(cfg=cfg, atm=atm, wmin=lo - SYNTH_PAD, wmax=hi + SYNTH_PAD, nlte=NLTE, broad=broad, profile=profile,
-                     **m) for m in models]
-        print(f"{len(jobs)} synthes{'is' if len(jobs) == 1 else 'es'} over {hi - lo + 2 * SYNTH_PAD:.1f} A ...")
-        with ProcessPoolExecutor(max_workers=max(1, min(len(jobs), N_JOBS))) as ex:
-            spectra = dict(zip([m["key"] for m in models], ex.map(synth_one, jobs)))
+        common = dict(cfg=cfg, atm=atm, wmin=lo - SYNTH_PAD, wmax=hi + SYNTH_PAD, nlte=NLTE)
+        if MODE == "synth":
+            jobs = [dict(common, broad=broad, profile=profile, **m) for m in models]
+            print(f"{len(jobs)} synthes{'is' if len(jobs) == 1 else 'es'} over {hi - lo + 2 * SYNTH_PAD:.1f} A ...")
+            with ProcessPoolExecutor(max_workers=max(1, min(len(jobs), N_JOBS))) as ex:
+                spectra = dict(zip([m["key"] for m in models], ex.map(synth_one, jobs)))
+            flux = {k: CONT_SCALE * np.interp(wl, *spectra[k]) for k in spectra}
+        else:
+            fit, ratio_fits, flux = run_fit(common, wl, fl, used, a0, broad, profile, cfg.snr, cfg.c12_c13, off)
     finally:
         shutil.rmtree(trim_dir, ignore_errors=True)
-    flux = {k: CONT_SCALE * np.interp(wl, *spectra[k]) for k in spectra}
+    if MODE == "fit":                                    # the drawn models are those of the best fit
+        abu_of = {"nominal": fit["A"], "band-": fit["A"] - off, "band+": fit["A"] + off, "without": WITHOUT}
+        models = [dict(m, abu=abu_of.get(m["key"], m["abu"]), ratio=fit["ratio"]) for m in models if m["key"] in flux]
+        a0, ratio_txt = fit["A"], (f"{fit['ratio']:g}" if fit["ratio"] is not None else "solar")
+        write_csv(outdir / "chi2_curve.csv", fit.pop("evals"))
+        if ratio_fits:
+            write_csv(outdir / "chi2_ratio.csv", [{k: f[k] for k in ("ratio", "A", "sigma", "chi2", "chi2_red", "dv_kms",
+                                                                    "broad_kms")} for f in ratio_fits])
+            plot_ratio_curve(outdir / "chi2_ratio.png", ratio_fits, fit,
+                             f"{SELECTED_STAR}  {lo:.0f}–{hi:.0f} Å: χ² against ¹²C/¹³C (A({ELEMENT}) refitted at each)")
+        print(f"A({ELEMENT}) = {fit['A']:.3f} +/- {fit['sigma']:.3f}  [{ELEMENT}/Fe] = {xfe(fit['A']):+.3f}   "
+              f"12C/13C = {ratio_txt}" + (f" ({fit['ratio_lo']:.1f}-{fit['ratio_hi']:.1f}, {fit['ratio_note']})"
+                                          if fit.get("ratio_lo") is not None else
+                                          (f" ({fit['ratio_note']})" if "ratio_note" in fit else "")))
+        print(f"  chi2_red {fit['chi2_red']:.2f}, RV {fit['dv_kms']:+.2f} km/s, broadening {fit['broad_kms']:.2f} km/s, "
+              f"continuum {fit['cont']}  [{fit['stop_reason']}]")
+        if FIT["abundance"] and abs(fit["A"] - cfg.babsma_abundance) > BABSMA_WARN:
+            print(f"WARNING: A({ELEMENT}) moved {fit['A'] - cfg.babsma_abundance:+.2f} dex from the babsma value "
+                  f"{cfg.babsma_abundance:.2f}: rerun with A_X = {fit['A']:.2f}")
+        if fit["at_boundary"]:
+            print("WARNING: the chi^2 minimum in A is not bracketed (search limit or MAX_SYNTH): see chi2_curve.csv")
 
     # chi^2 / rms per model
     stats = {}
@@ -317,15 +522,22 @@ def main() -> None:
         curves.append(dict(flux=flux["without"], colour="tab:orange", lw=0.9, ls="--", label=f"without {ELEMENT}",
                            resid=False))
     colours = iter(["tab:green", "tab:purple", "tab:brown", "tab:pink", "tab:olive", "tab:cyan"] * 3)
-    for r in EXTRA_RATIOS:
+    for r in (EXTRA_RATIOS if MODE == "synth" else []):
         curves.append(dict(flux=flux[f"ratio {r:g}"], colour=next(colours), lw=0.9, label=f"¹²C/¹³C = {r:g}"))
     for a in EXTRA_ABUNDANCES:
         curves.append(dict(flux=flux[f"A {a:.2f}"], colour=next(colours), lw=0.9, ls="-.",
                            label=f"A({ELEMENT}) = {a:.2f} ([{ELEMENT}/Fe] = {xfe(a):+.2f})"))
     band = np.vstack([flux["band-"], flux["band+"]]) if off else None
-    title = (f"{SELECTED_STAR}  {lo:.1f}–{hi:.1f} Å   Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} [Fe/H]={feh:+.2f}  "
-             f"{mode}   broad {broad:g} km/s {profile}   RV {RV_SHIFT:+.2f} km/s   cont ×{CONT_SCALE:g}   "
-             f"χ²_red {stats['nominal']['chi2_red']:.2f}")
+    if MODE == "synth":
+        title = (f"{SELECTED_STAR}  {lo:.1f}–{hi:.1f} Å   Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} "
+                 f"[Fe/H]={feh:+.2f}  {mode}   broad {broad:g} km/s {profile}   RV {RV_SHIFT:+.2f} km/s   "
+                 f"cont ×{CONT_SCALE:g}   χ²_red {stats['nominal']['chi2_red']:.2f}")
+    else:
+        free = ", ".join(k for k, v in FIT.items() if v)
+        title = (f"{SELECTED_STAR}  {lo:.1f}–{hi:.1f} Å  FIT ({free})   Teff={teff:.0f} logg={logg:.2f} vmic={vmic:.2f} "
+                 f"[Fe/H]={feh:+.2f}  {mode}\nA({ELEMENT}) = {fit['A']:.3f} ± {fit['sigma']:.3f}   "
+                 f"[{ELEMENT}/Fe] = {xfe(fit['A']):+.2f}   ¹²C/¹³C = {ratio_txt}   broad {fit['broad_kms']:.2f} km/s "
+                 f"{profile}   RV {RV_SHIFT + fit['dv_kms']:+.2f} km/s   cont {fit['cont']}   χ²_red {fit['chi2_red']:.2f}")
     plot_region(outdir / "region.png", wl, fl, curves, band, f"A({ELEMENT}) ∓ {off:g} dex", used, title)
 
     cols = {"wavelength": wl, "flux_obs": fl, "used": used.astype(int)}
@@ -335,13 +547,20 @@ def main() -> None:
     summary = dict(
         star=SELECTED_STAR, range=[lo, hi], element=ELEMENT, nlte=NLTE == "T", teff=teff, logg=logg, vmic=vmic,
         feh_atmosphere=feh, mass=mass, atmosphere=atm.atm.name, broadening=broad, broad_profile=profile,
-        rv_shift=RV_SHIFT, cont_scale=CONT_SCALE, A_nominal=a0, xfe_nominal=round(xfe(a0), 3),
+        mode=MODE, rv_shift=RV_SHIFT, cont_scale=CONT_SCALE, A_nominal=a0, xfe_nominal=round(xfe(a0), 3),
         solar_abundance_scale="asp2007 (Turbospectrum default)", c12_c13=cfg.c12_c13, molecules=molecules,
         abundance_overrides=dict(ABUNDANCE_OVERRIDES), other_abundances=others, exclude=[list(x) for x in EXCLUDE],
+        include=[list(x) for x in INCLUDE] if INCLUDE else None,
         spectrum=str(cfg.spectrum_file), snr=cfg.snr, n_pixels=int(used.sum()),
         models={m["key"]: dict(A=m["abu"], c12_c13=m["ratio"], **stats[m["key"]]) for m in models},
         runtime_s=round(time.time() - t0),
     )
+    if MODE == "fit":
+        summary["fit_free"] = dict(FIT)
+        summary["fit_settings"] = dict(RATIO_GRID=list(RATIO_GRID) if FIT["c12_c13"] else None, A_HALF_RANGE=A_HALF_RANGE,
+                                       RV_MAX=RV_MAX, BROAD_MAX=BROAD_MAX, CONT_ORDER=CONT_ORDER, CONT_PRIOR=CONT_PRIOR,
+                                       MAX_SYNTH=MAX_SYNTH, A_babsma=cfg.babsma_abundance)
+        summary["fit"] = dict(fit, xfe=round(xfe(fit["A"]), 4), rv_total_kms=round(RV_SHIFT + fit["dv_kms"], 3))
     (outdir / "summary.yaml").write_text(yaml.dump(summary, sort_keys=False))
     print(f"Plot: {outdir / 'region.png'}")
 
