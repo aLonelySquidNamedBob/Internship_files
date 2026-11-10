@@ -73,8 +73,9 @@ from element_line_fit import SOLAR_TS, load_element_config, make_atmosphere, sta
 # ---------------------------------------------------------------------------
 
 SELECTED_STAR = "HD196944"
-RANGE = (4295.0, 4330.0)      # synthesised and plotted range [A], rest frame of the star
-ELEMENT = "C"                 # the element set by A_X / X_FE (and removed in the "without" model)
+RANGE = (4295.0, 4330.0) # CH     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (4150.0, 4215.0) # CN     # synthesised and plotted range [A], rest frame of the star
+ELEMENT = "N"                 # the element set by A_X / X_FE (and removed in the "without" model)
 
 # A(ELEMENT): A_X (absolute, log eps with H = 12), else X_FE ([X/Fe] on Turbospectrum's solar scale with FEH as [Fe/H]),
 # else the reference file / ABUNDANCE_OVERRIDES, else scaled solar.
@@ -84,6 +85,7 @@ C12_C13 = None                # None: the reference file (isotope_ratios: C12_C1
 MOLECULES = None              # None: `molecular_line_lists` of stars.yaml; else groups of line_lists.yaml, e.g. ["CH"]
                               # or ["CH", "CC", "CN"]. [] = no molecules at all
 ABUNDANCE_OVERRIDES = {       # other elements, A(X); beats the reference file. O sets how much C is locked in CO, N the CN
+    "C": 7.16
     # "O": 7.43,
     # "N": 7.99,
 }
@@ -103,7 +105,7 @@ NLTE = "F"                    # "T": ELEMENT in NLTE (needs its grid in data/ori
 RV_SHIFT = 0.0                # km/s, on top of `rv` in stars.yaml (the Fe fits give the residual shift: dv_kms)
 CONT_SCALE = 1.0              # every model is multiplied by this (a continuum placement check; 1 = trust the normalisation)
 
-BAND_OFFSET = 0.2             # dex; None or 0: no band
+BAND_OFFSET = 0.2            # dex; None or 0: no band
 SHOW_WITHOUT = True           # also the model without ELEMENT
 EXTRA_RATIOS = []             # e.g. [4, 20]: more 12C/13C at the nominal A(ELEMENT)
 EXTRA_ABUNDANCES = []         # e.g. [7.0, 7.8]: more A(ELEMENT) at the nominal 12C/13C
@@ -269,7 +271,7 @@ def plot_region(path: Path, wl: np.ndarray, obs: np.ndarray, curves: list[dict],
     n = max(1, math.ceil((hi - lo) / PANEL_WIDTH - 1e-9))
     edges = np.linspace(lo, hi, n + 1)
     fig, axes = plt.subplots(2 * n, 1, figsize=(20, 4.6 * n), squeeze=False,
-                             gridspec_kw=dict(height_ratios=[3, 1.1] * n, hspace=0.08))
+                             gridspec_kw=dict(height_ratios=[3, 1.1] * n, hspace=0.25))
     axes = axes[:, 0]
     for k in range(n):
         ax, rax = axes[2 * k], axes[2 * k + 1]
