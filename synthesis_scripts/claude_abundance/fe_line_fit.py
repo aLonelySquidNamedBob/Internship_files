@@ -555,6 +555,7 @@ class FitSettings:
                                    # at the line). Lower it if you use a broader instrumental profile.
     # continuum
     fit_continuum: bool = False    # False: continuum fixed at 1 (trust the normalisation)
+    cont_scale: float = 1.0        # continuum scale to take if the continuum is not fitted.
     cont_order: int = 0            # if fitted - 0: scale only, 1: scale + slope
     cont_prior: float = 0.01       # if fitted - sigma of a Gaussian prior on the local continuum (scale 1,
                                    # slope 0); <= 0 leaves it free. A free scale absorbs profile mismatches
@@ -892,7 +893,7 @@ class LineFitter:
         if s.cont_method not in ("lsq", "median_clip"):
             raise ValueError(f"cont_method must be 'lsq' or 'median_clip', not {s.cont_method!r}")
         self.order = s.cont_order if s.fit_continuum else None
-        self.scale = 1.0                                    # the fixed continuum when self.order is None
+        self.scale = s.cont_scale if not s.fit_continuum else 1.0     # the fixed continuum when self.order is None
         self.cont_info: dict | None = None                  # median_clip result (None: not used)
         self.cont_method = "fixed" if not s.fit_continuum else "lsq"
         self.n_free = int(s.fit_rv) + int(fixed_broad is None)
@@ -1545,6 +1546,14 @@ def fit_lines(lines: list[dict], atm: AtmosphereSpec, cfg: StarConfig,
     if capped:
         print(f"    NOTE: {len(capped)} line(s) reached max_synth = {s.max_synth} syntheses without converging to "
               f"a_tol = {s.a_tol}: {', '.join(capped)}", flush=True)
+    if s.fit_continuum and s.cont_method == "median_clip":
+        fell_back = [(r["line_id"], str(r.get("cont_method", ""))) for r in results
+                     if r.get("status") == "ok" and str(r.get("cont_method", "")) != "median_clip"]
+        if fell_back:
+            print(f"    WARNING: cont_method = 'median_clip', but {len(fell_back)} of {len(results)} line(s) fell back to "
+                  f"the 'lsq' continuum:", flush=True)
+            for lid, why in fell_back:
+                print(f"      {lid}: {why.replace('lsq (median_clip failed: ', '').rstrip(')')}", flush=True)
     write_csv(outdir / "lines.csv", results)
     return results
 
@@ -1660,6 +1669,13 @@ def analyze(rows: list[dict], s: FitSettings | None = None, flags: dict[str, str
     else:
         info.update(slope_ep=nan, slope_ep_err=nan, icpt_ep=nan, slope_rew=nan, slope_rew_err=nan,
                     icpt_rew=nan, A1=nan, s1=nan, e1=nan)
+    # A vs REW for the Fe II lines alone and for Fe I + Fe II together (plain fit, no offset between the ions)
+    rew2 = rew[m2]
+    rew_all, A_all = np.concatenate([rew1, rew2]), np.concatenate([A1k, A2])
+    for key, xs, ys, n_min in (("rew_fe2", rew2, A2, 3), ("rew_all", rew_all, A_all, 4)):
+        good = np.isfinite(xs) & np.isfinite(ys)
+        fit = linfit(xs[good], ys[good]) if good.sum() >= n_min and np.ptp(xs[good]) > 0 else (nan, nan, nan)
+        info.update({f"slope_{key}": fit[0], f"icpt_{key}": fit[1], f"slope_{key}_err": fit[2]})
     if len(A2) >= 2:
         info.update(A2=float(A2.mean()), s2=float(A2.std(ddof=1)), e2=sem(A2))
         # info.update(A2=float(A2.mean()), s2=float(A2.std(ddof=1)), e2=float(A2.std(ddof=1) / np.sqrt(len(A2))))
@@ -1679,6 +1695,8 @@ def print_summary(info: dict) -> None:
     print(f"  A(Fe II) - A(Fe I) = {info['dA']:+.3f} +/- {info['dA_err']:.3f}")
     print(f"  slope vs EP  =       {info['slope_ep']:+.4f} +/- {info['slope_ep_err']:.4f} dex/eV")
     print(f"  slope vs REW =       {info['slope_rew']:+.4f} +/- {info['slope_rew_err']:.4f} dex/dex")
+    print(f"  slope vs REW (Fe II) = {info['slope_rew_fe2']:+.4f} +/- {info['slope_rew_fe2_err']:.4f} dex/dex")
+    print(f"  slope vs REW (Fe I+II) = {info['slope_rew_all']:+.4f} +/- {info['slope_rew_all_err']:.4f} dex/dex")
     print(f"  selection of lines (see `selection` in lines.csv):")
     print(f"  used lines:                           {info['n_fe1'] + info['n_fe2']} / {info['n_total']}")
     print(f"  sigma-clipped:                        {len(info['clipped_ids'])}")
@@ -1751,10 +1769,21 @@ def plot_diagnostics(rows: list[dict], info: dict, path: Path, title: str = "", 
         if sel.any():
             ax.plot(x[sel], np.clip(A[sel], lo, hi), marker="s", mfc="none", mec="tab:orange", mew=1.3, ls="none",
                     ms=10, label="flagged by hand")
-        if key and np.isfinite(info[f"slope_{key}"]):
+        if key == "ep" and np.isfinite(info["slope_ep"]):
             xx = np.array([x[used & (ion == 1)].min(), x[used & (ion == 1)].max()])
-            ax.plot(xx, info[f"icpt_{key}"] + info[f"slope_{key}"] * xx, "b-", lw=0.8)
-            ax.set_title(f"slope {info[f'slope_{key}']:+.4f} +/- {info[f'slope_{key}_err']:.4f}", fontsize=9)
+            ax.plot(xx, info["icpt_ep"] + info["slope_ep"] * xx, "b-", lw=0.8)
+            ax.set_title(f"slope {info['slope_ep']:+.4f} +/- {info['slope_ep_err']:.4f}", fontsize=9)
+        elif key == "rew":                                                      # Fe I, Fe II and Fe I + II slopes
+            parts = []
+            for tag, name, color, ls, sel in (("rew", "Fe I", "tab:blue", "-", used & (ion == 1)),
+                                              ("rew_fe2", "Fe II", "tab:red", "-", used & (ion == 2)),
+                                              ("rew_all", "Fe I+II", "k", "--", used)):
+                sl = info.get(f"slope_{tag}", np.nan)
+                if np.isfinite(sl) and sel.any():
+                    xx = np.array([x[sel].min(), x[sel].max()])
+                    ax.plot(xx, info[f"icpt_{tag}"] + sl * xx, color=color, ls=ls, lw=1.0)
+                    parts.append(f"{name} {sl:+.3f}+/-{info[f'slope_{tag}_err']:.3f}")
+            ax.set_title("slope: " + ", ".join(parts), fontsize=8)
         for k, color in ((1, "tab:blue"), (2, "tab:red")):                      # the totals
             m, e = info.get(f"A{k}"), info.get(f"e{k}")
             if m is not None and np.isfinite(m):
@@ -1806,7 +1835,7 @@ def read_cont_pixels(path: Path) -> np.ndarray | None:
 
 
 def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str, tuple] | None = None,
-                  title: str = "", marks: dict[str, str] | None = None, ncols: int = 8,
+                  title: str = "", marks: dict[str, str] | None = None, ncols: int = 8, width: float = 3.1,
                   totals: str = "", fit_settings: dict | None = None) -> None:
     """All line fits of a run in one image (from lines/<line_id>/bestfit.csv), sorted by wavelength and
     numbered. Panel colour = selection (black used, grey sigma-clipped, orange flagged, red rejected); the grey
@@ -1829,7 +1858,7 @@ def plot_overview(rows: list[dict], run_dir: Path, path: Path, windows: dict[str
                   broad=fs.get("fit_broadening", fs.get("broadening") is None),
                   cont=fs.get("fit_continuum", False))
     profile = fs.get("broad_profile", "")
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.1 * ncols, row_h * nrows + head), squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(width * ncols, row_h * nrows + head), squeeze=False)
 
     def f(r, k):
         if k == "broad_kms" and k not in r:                  # runs made before the rename
