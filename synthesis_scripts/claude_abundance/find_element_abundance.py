@@ -86,7 +86,7 @@ LINE_FILE = None                     # None -> data/selected_lines/<star>/<star>
 ONLY_LINES = None                    # e.g. ["Ba2_4554.0330", "Ba2_6141.7130"]: fit only these (quick checks)
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
     n_jobs=10,
-    half_window=0.6,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
+    half_window=4,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
     window_ref_wavelength=5000.0,    # with lambda (constant in km/s). Strong lines (Ba II 4554 and 4934, Mg b, Sr II ...)
                                      # need more: set chi2_left / chi2_right for them in the line CSV (or with review_fits.py)
     fit_broadening=False,           # True: fit it per line (0..broad_max); False: VMAC / `vmac` of stars.yaml for every line
@@ -98,9 +98,10 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     max_misfit=None,                 # reject lines whose systematic misfit is larger (`misfit` in lines.csv); None = no cut
     chi2_factor=None,
     min_ep=None,                     # None = no EP cut: the resonance lines (Ba II 4554, Sr II 4077, Ca I 4226 ...) have EP = 0
-    fit_continuum=True,              # True: also fit a local continuum scale per line
+    fit_continuum=True,             # True: also fit a local continuum scale per line
+    # cont_scale=0.995,
     cont_method="median_clip",       # "lsq": scale fitted with the line; "median_clip": clipped median over continuum pixels
-    fit_region="window",             # pixels in chi^2: "window", "line" (fit_left..fit_right of the CSV) or "core"
+    fit_region="line",             # pixels in chi^2: "window", "line" (fit_left..fit_right of the CSV) or "core"
     a_step_warm=0.10,
     a_tol=0.001,
     a_local=0.05,
@@ -113,6 +114,11 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
 USE_REFERENCE_ABUNDANCES = True      # config/reference_abundance.yaml for SELECTED_STAR (null entries are not used)
 REFERENCE_SCALING = "absolute"       # "absolute", "fe" or "xfe", see find_stellar_parameters
 ABUNDANCE_OVERRIDES = {              # element: A(X), or None = back to scaled solar. Beats the reference file.
+    "C": 7.14,
+    "O": 6.98,
+    "N": 7.11,
+    "Sr": 1.81,
+    # "Fe": 0.00
 }
 USE_ISOTOPE_RATIOS = True            # 12C/13C from the reference file (bsyn ISOTOPES)
 KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv, synth/, chi2_curve.csv)
@@ -171,7 +177,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
         plot_element_diagnostics(rows, info, outdir / "diagnostics.png", head)
     plot_overview(rows, outdir, outdir / "overview.png",
                   windows={r["line_id"]: (r["fit_left"], r["fit_right"]) for r in lines}, title=head,
-                  totals=element_totals_text(info), fit_settings=dataclasses.asdict(settings))
+                  totals=element_totals_text(info), fit_settings=dataclasses.asdict(settings), width=7, ncols=3)
     if not KEEP_LINE_FILES:
         shutil.rmtree(outdir / "lines", ignore_errors=True)
 
