@@ -64,7 +64,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # find fe_line_fit.py next to this script
 from fe_line_fit import (C_KMS, CONFIG_DIR, FALTBON_PROFILE, RUNS_DIR, SCRATCH_DIR, Data, FitSettings, LineFitter,
-                         LineSynth, individual_abundances, load_spectrum, parse_atm_name, resolve_path, trim_linelists,
+                         LineSynth, plot_cont_pixels, individual_abundances, load_spectrum, parse_atm_name, resolve_path, trim_linelists,
                          write_csv)
 from element_line_fit import SOLAR_TS, load_element_config, make_atmosphere, start_abundance
 
@@ -73,21 +73,28 @@ from element_line_fit import SOLAR_TS, load_element_config, make_atmosphere, sta
 # ---------------------------------------------------------------------------
 
 SELECTED_STAR = "HD196944"
-RANGE = (4295.0, 4330.0) # CH     # synthesised and plotted range [A], rest frame of the star
-# RANGE = (4150.0, 4215.0) # CN     # synthesised and plotted range [A], rest frame of the star
-ELEMENT = "N"                 # the element set by A_X / X_FE (and removed in the "without" model)
+# RANGE = (4295.0, 4330.0) # CH     # synthesised and plotted range [A], rest frame of the star
+RANGE = (4228.0, 4238.0) # CH     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (4200.0, 4330.0) # CH     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (4212.0, 4217.0) # CN     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (4212.0, 4223.0) # CN     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (4330.0, 4500) # CH     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (5155.0, 5164.0) # CC     # synthesised and plotted range [A], rest frame of the star
+# RANGE = (5626.0, 5634.0) # CC     # synthesised and plotted range [A], rest frame of the star
+ELEMENT = "C"                 # the element set by A_X / X_FE (and removed in the "without" model)
 
 # A(ELEMENT): A_X (absolute, log eps with H = 12), else X_FE ([X/Fe] on Turbospectrum's solar scale with FEH as [Fe/H]),
 # else the reference file / ABUNDANCE_OVERRIDES, else scaled solar.
-A_X = None
+A_X = 7.13
 X_FE = None
-C12_C13 = None                # None: the reference file (isotope_ratios: C12_C13), else Turbospectrum's solar mix (~89)
+C12_C13 = 4.72                # None: the reference file (isotope_ratios: C12_C13), else Turbospectrum's solar mix (~89)
 MOLECULES = None              # None: `molecular_line_lists` of stars.yaml; else groups of line_lists.yaml, e.g. ["CH"]
                               # or ["CH", "CC", "CN"]. [] = no molecules at all
 ABUNDANCE_OVERRIDES = {       # other elements, A(X); beats the reference file. O sets how much C is locked in CO, N the CN
-    "C": 7.16
-    # "O": 7.43,
-    # "N": 7.99,
+    "C": 7.14,
+    "O": 6.98,
+    "N": 7.11,
+    "Sr": 1.81,
 }
 USE_REFERENCE_ABUNDANCES = True    # config/reference_abundance.yaml for SELECTED_STAR
 REFERENCE_SCALING = "absolute"     # "absolute", "fe" or "xfe", see find_stellar_parameters
@@ -103,9 +110,9 @@ MASS = None                   # None: from `model_atmosphere` in stars.yaml (1.0
 NLTE = "F"                    # "T": ELEMENT in NLTE (needs its grid in data/original/NLTE/dc/), the rest LTE
 
 RV_SHIFT = 0.0                # km/s, on top of `rv` in stars.yaml (the Fe fits give the residual shift: dv_kms)
-CONT_SCALE = 1.0              # every model is multiplied by this (a continuum placement check; 1 = trust the normalisation)
+CONT_SCALE = 1.023              # every model is multiplied by this (a continuum placement check; 1 = trust the normalisation)
 
-BAND_OFFSET = 0.2            # dex; None or 0: no band
+BAND_OFFSET = 0.2             # dex; None or 0: no band
 SHOW_WITHOUT = True           # also the model without ELEMENT
 EXTRA_RATIOS = []             # e.g. [4, 20]: more 12C/13C at the nominal A(ELEMENT)
 EXTRA_ABUNDANCES = []         # e.g. [7.0, 7.8]: more A(ELEMENT) at the nominal 12C/13C
@@ -113,20 +120,22 @@ EXCLUDE = []                  # [(lo, hi), ...] left out of chi^2 / rms and of t
 INCLUDE = None                # None: all of RANGE in chi^2; else only these [(lo, hi), ...] (minus EXCLUDE), e.g. the
                               # weaker, unsaturated part of a band. The plot still shows all of RANGE
 
-MODE = "synth"                # "synth": the models above, nothing fitted; "fit": fit the chi^2 pixels (see the top)
-FIT = dict(abundance=True, c12_c13=False, rv=True, broadening=False, continuum=False)   # what the fit varies
+MODE = "fit"                # "synth": the models above, nothing fitted; "fit": fit the chi^2 pixels (see the top)
+FIT = dict(abundance=False, c12_c13=True, rv=True, broadening=False, continuum=True)   # what the fit varies
 RATIO_GRID = (3, 5, 8, 12, 20, 35, 60)   # 12C/13C values when c12_c13 is free
 A_HALF_RANGE = 1.5            # A(ELEMENT) is confined to the starting value +/- this
 RV_MAX = 3.0                  # km/s, limit of the fitted RV shift
 BROAD_MAX = 20.0              # km/s, upper limit of the fitted broadening
 CONT_ORDER = 0                # fitted continuum: 0 scale, 1 scale + slope over RANGE
 CONT_PRIOR = 0.02             # sigma of the Gaussian prior on the fitted continuum (<= 0: free)
+CONT_DEPTH_MAX = 0.01         # threshold for selecting continuum pixels
 MAX_SYNTH = 20                # cap on bsyn runs per abundance search (per ratio)
 BABSMA_WARN = 0.3             # dex: warn when the fitted A(ELEMENT) is this far from the babsma value
 
 N_JOBS = 8                    # parallel syntheses (each runs babsma + bsyn over the whole range)
 SYNTH_PAD = 2.0               # synthesis extends this far beyond RANGE [A] (RV shift, broadening kernel)
 PANEL_WIDTH = 12.0            # A per row of region.png
+XTICKS = 24                   # about this many major x-ticks per row (minor ticks every 1/5)
 YLIM = (None, 1.05)           # flux axis of the spectrum panels (None: automatic)
 RESID_YLIM = 0.10             # residual panels: +/- this
 
@@ -180,6 +189,7 @@ def fit_one(job: dict) -> dict:
                    chi2_red=float(ev["chi2"]) / dof, dof=dof, dv_kms=round(float(ev["dv"]), 3),
                    broad_kms=round(float(ev["broad"]), 3), cont=[round(float(c), 5) for c in ev["coef"]],
                    stop_reason=stop, at_boundary=at_boundary, n_synth=synth.n_runs,
+                   cont_method=fitter.cont_method,
                    evals=[dict(A=a, chi2=e["chi2"], dv_kms=e["dv"], broad_kms=e["broad"], cont=e["cont"])
                           for a, e in sorted(fitter.evals.items())])
         if job["extras"]:
@@ -193,6 +203,11 @@ def fit_one(job: dict) -> dict:
             for a in job["extra_abundances"]:
                 flux[f"A {a:.2f}"] = fitter.model_full(round(float(a), 4), ev)
             res["flux"] = flux
+            ci = fitter.cont_info
+            if ci and fitter.cont_method == "median_clip":      # 1 used for c, 2 clipped candidate
+                cp = np.zeros(len(fitter.d_full.wl), int)
+                cp[ci["used"]], cp[ci["clipped"]] = 1, 2
+                res["cont_pixel"] = cp
         return res
     except Exception as exc:
         log = workdir / "log.txt"
@@ -261,11 +276,13 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 def plot_region(path: Path, wl: np.ndarray, obs: np.ndarray, curves: list[dict], band: np.ndarray | None,
-                band_label: str, used: np.ndarray, title: str) -> None:
+                band_label: str, used: np.ndarray, title: str,
+                cont_pixel: np.ndarray | None = None, cont_scale: float = 1.0) -> None:
     """curves[0] is the nominal model (bold residuals); the others get thin residuals unless resid=False."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
     lo, hi = RANGE
     n = max(1, math.ceil((hi - lo) / PANEL_WIDTH - 1e-9))
@@ -284,7 +301,11 @@ def plot_region(path: Path, wl: np.ndarray, obs: np.ndarray, curves: list[dict],
             ax.fill_between(wl[sel], band[0][sel], band[1][sel], color="tab:blue", alpha=0.25, lw=0,
                             label=band_label if k == 0 else None)
         ax.plot(wl[sel], obs[sel], "-", color="0.45", lw=0.9, label="observed" if k == 0 else None)
+        ax.axhline(cont_scale, color="tab:green", lw=1.0, ls=":", zorder=2,   # the continuum the models are scaled by,
+                   label=f"continuum {cont_scale:.4f}" if k == 0 else None)  # on every row (also rows without continuum pixels)
         rax.axhline(0, color="0.3", lw=0.8)
+        if cont_pixel is not None:                       # median_clip continuum pixels (green rings), clipped (orange x)
+            plot_cont_pixels(ax, wl[sel], obs[sel], cont_pixel[sel], c=None, label=k == 0)   # rings only; line drawn above
         for j, c in enumerate(curves):
             ax.plot(wl[sel], c["flux"][sel], color=c["colour"], ls=c.get("ls", "-"), lw=c.get("lw", 1.0),
                     label=c["label"] if k == 0 else None, zorder=3 if j == 0 else 2)
@@ -293,6 +314,8 @@ def plot_region(path: Path, wl: np.ndarray, obs: np.ndarray, curves: list[dict],
                          lw=0.9 if j == 0 else 0.6, alpha=1.0 if j == 0 else 0.7)
         for axx in (ax, rax):
             axx.set_xlim(a, b)
+            axx.xaxis.set_major_locator(MaxNLocator(nbins=XTICKS, steps=[1, 2, 5, 10]))
+            axx.xaxis.set_minor_locator(AutoMinorLocator(5))
             axx.grid(alpha=0.3)
         ax.set_ylim(*YLIM)
         ax.set_ylabel("normalised flux")
@@ -317,7 +340,7 @@ def run_fit(common: dict, wl: np.ndarray, fl: np.ndarray, used: np.ndarray, a0: 
     lo, hi = RANGE
     s = FitSettings(n_jobs=1, fit_rv=FIT["rv"], rv_max=RV_MAX, rv_fixed=0.0, broad_profile=profile,
                     fit_broadening=FIT["broadening"], broadening=broad, broad_max=BROAD_MAX,
-                    fit_continuum=FIT["continuum"], cont_order=CONT_ORDER, cont_prior=CONT_PRIOR, cont_method="lsq",
+                    fit_continuum=FIT["continuum"], cont_order=CONT_ORDER, cont_prior=CONT_PRIOR, cont_method="median_clip", cont_depth_max=CONT_DEPTH_MAX,
                     no_fe_profile=False, abund_band=False, trim_linelists=False, keep_synth=False, make_plots=False,
                     a_half_range=A_HALF_RANGE, max_synth=MAX_SYNTH, a_tol=0.005, a_local=0.05)
     if CONT_SCALE != 1.0 and FIT["continuum"]:
@@ -484,6 +507,10 @@ def main() -> None:
             fit, ratio_fits, flux = run_fit(common, wl, fl, used, a0, broad, profile, cfg.snr, cfg.c12_c13, off)
     finally:
         shutil.rmtree(trim_dir, ignore_errors=True)
+    cont_pixel = fit.pop("cont_pixel", None) if MODE == "fit" else None
+    cont_scale = CONT_SCALE
+    if MODE == "fit":                                    # fit["cont"] is a coefficient list; [0] is the level c
+        cont_scale = float(fit["cont"][0]) if FIT["continuum"] else CONT_SCALE
     if MODE == "fit":                                    # the drawn models are those of the best fit
         abu_of = {"nominal": fit["A"], "band-": fit["A"] - off, "band+": fit["A"] + off, "without": WITHOUT}
         models = [dict(m, abu=abu_of.get(m["key"], m["abu"]), ratio=fit["ratio"]) for m in models if m["key"] in flux]
@@ -498,6 +525,9 @@ def main() -> None:
               f"12C/13C = {ratio_txt}" + (f" ({fit['ratio_lo']:.1f}-{fit['ratio_hi']:.1f}, {fit['ratio_note']})"
                                           if fit.get("ratio_lo") is not None else
                                           (f" ({fit['ratio_note']})" if "ratio_note" in fit else "")))
+        if FIT["continuum"] and fit.get("cont_method") != "median_clip":
+            print(f"WARNING: cont_method = 'median_clip' fell back to the 'lsq' continuum: "
+                  f"{str(fit.get('cont_method')).replace('lsq (median_clip failed: ', '').rstrip(')')}")
         print(f"  chi2_red {fit['chi2_red']:.2f}, RV {fit['dv_kms']:+.2f} km/s, broadening {fit['broad_kms']:.2f} km/s, "
               f"continuum {fit['cont']}  [{fit['stop_reason']}]")
         if FIT["abundance"] and abs(fit["A"] - cfg.babsma_abundance) > BABSMA_WARN:
@@ -540,7 +570,7 @@ def main() -> None:
                  f"[Fe/H]={feh:+.2f}  {mode}\nA({ELEMENT}) = {fit['A']:.3f} ± {fit['sigma']:.3f}   "
                  f"[{ELEMENT}/Fe] = {xfe(fit['A']):+.2f}   ¹²C/¹³C = {ratio_txt}   broad {fit['broad_kms']:.2f} km/s "
                  f"{profile}   RV {RV_SHIFT + fit['dv_kms']:+.2f} km/s   cont {fit['cont']}   χ²_red {fit['chi2_red']:.2f}")
-    plot_region(outdir / "region.png", wl, fl, curves, band, f"A({ELEMENT}) ∓ {off:g} dex", used, title)
+    plot_region(outdir / "region.png", wl, fl, curves, band, f"A({ELEMENT}) ∓ {off:g} dex", used, title, cont_pixel, cont_scale)
 
     cols = {"wavelength": wl, "flux_obs": fl, "used": used.astype(int)}
     cols |= {f"flux_{k.replace(' ', '_')}": f for k, f in flux.items()}
