@@ -9,7 +9,8 @@ What it does (one pass, nothing is iterated, so a run is fully set by the settin
      interp_nlte_2.py; the departure coefficients are computed for A(Fe) = 7.45 + FEH (SOLAR_FE),
   2. fits A(Fe) line by line with fe_line_fit.fit_lines (see fe_line_fit.py for the method),
   3. writes the per-line table and a summary: mean A(Fe I), A(Fe II), their difference and the
-     slopes of A(Fe I) against excitation potential and reduced EW. These are for inspection only;
+     slopes of A(Fe I) against excitation potential and reduced EW, plus the REW slope of the Fe II lines alone
+     and of Fe I + Fe II together (plain fit, no offset between the ions). These are for inspection only;
      nothing is adjusted.
 
 Notes on lines go into data/selected_lines/<star>/fe_line_flags.yaml (next to the line CSV) as line_id: reason;
@@ -62,19 +63,19 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HE22081239"
+SELECTED_STAR = "HD2454"
 
-TEFF = 5000                          # K
-LOGG = 1.50                          # dex (cgs)
-VMIC = 1.30                          # km/s
-FEH = -2.70                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+TEFF = 6330                          # K
+LOGG = 3.70                          # dex (cgs)
+VMIC = 1.78                          # km/s
+FEH = -0.43                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
 NLTE = "T"                           # "T" = NLTE, "F" = LTE
-VMAC = 8.00
+VMAC = 12.30
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
                                      # 0.0 = plane-parallel)
 RUN_NOTE = ""                        # what is special about this run, e.g. "vmic 1.8" / "alt linelist"; goes into summary.yaml
-LINE_FILE = None                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
+LINE_FILE = None                    # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
     n_jobs=10,
     half_window=0.8,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled

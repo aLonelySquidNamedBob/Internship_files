@@ -68,13 +68,13 @@ HD196944:
   name: "HD 196944"
 
   abundances:
-    C: {value: 7.46, error: 0.12}
-    N: {value: 7.99, error: 0.30}
-    O: {value: 7.43, error: 0.09}
+    C: {value: 7.14, error: 0.12}
+    N: {value: 7.11, error: 0.30}
+    O: {value: 6.98, error: 0.09}
     Mg: {value: 5.73, error: 0.07}
     Fe: {value: 5.50, error: 0.07, nlte: true}
     Si: {value: 5.78, error: 0.16}
-    Sr: {value: 1.21, error: 0.13}
+    Sr: {value: 1.81, error: 0.13} # To verify
     Y: {value: 0.85, error: 0.08}
     Zr: {value: 1.33, error: 0.09}
     Ba: {value: 1.15, error: null, note: "3D non-LTE line modelling"}

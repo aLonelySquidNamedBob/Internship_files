@@ -11,3 +11,9 @@ element:
     model_atom: "atom.ba111"
     model_atom_path: "/home/student/NICO/data/original/NLTE/MODEL_ATOM/Ba/"
     global_departure_coefficients: null
+
+  O:
+    atomic_number: 8
+    model_atom: "atom.o41f"
+    model_atom_path: "/home/student/NICO/data/original/NLTE/MODEL_ATOM/O/"
+    global_departure_coefficients: "/home/student/NICO/data/original/NLTE/dc/O/NLTEgrid4TS_O_MARCS_May-21-2021.bin"
