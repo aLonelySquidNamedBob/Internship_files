@@ -37,6 +37,22 @@ Everything goes to  ~/NICO/runs/<star>/fe_abundance/T<teff>_g<logg>_v<vmic>_z<fe
     atm/                 the interpolated atmosphere and departure coefficients
 
 run_point() does one parameter set, so a Teff/logg/vmic grid is a loop over it (see the end of main()).
+
+AUTO_TUNE = True instead iterates the parameters (tune()), starting from TEFF / LOGG / VMIC / FEH:
+    Teff    until slope(A(Fe I) vs EP) = 0             (excitation balance)
+    vmic    until slope(A vs REW) = 0                  (Fe I only, or Fe I + Fe II: VMIC_SLOPE)
+    logg    until A(Fe II) = A(Fe I)                   (ionisation balance)
+    [Fe/H]  until the atmosphere's [Fe/H] = A(Fe I) - 7.45
+Newton steps on these four conditions. The first Jacobian comes from one finite-difference run per parameter
+(FD_STEP; [Fe/H] has none, its column starts at 0) or from an earlier tuning (JACOBIAN_FROM); after that every run
+updates it (Broyden), so each iteration costs one full line fit. Parameters set False in TUNE stay at the values
+above and their condition is dropped. Every run is an ordinary run directory in fe_abundance/ (name ends in
+_tune<NN>), so review_fits.py and balmer_wings*.py see them as usual; the tuning itself goes to
+    ~/NICO/runs/<star>/fe_tuning/<time>_<NLTE|LTE>/
+        tune_log.csv     one row per run: parameters, A(Fe I/II), slopes, conditions, run directory
+        tune.yaml        settings, how it ended, final and best parameter set, the Jacobian (per K / dex / km/s)
+        tune.png         parameters and conditions (in units of their error) against run number
+Nothing is written to stars.yaml; the result is printed at the end.
 """
 
 from __future__ import annotations
@@ -47,6 +63,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import csv
 import time
 from pathlib import Path
 
@@ -63,19 +80,19 @@ from fe_line_fit import (HOME, RUNS_DIR, SOLAR_FE, TS_DIR, AtmosphereSpec, FitSe
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "TIC396792499"
 
-TEFF = 6330                          # K
-LOGG = 3.70                          # dex (cgs)
-VMIC = 1.78                          # km/s
-FEH = -0.43                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
-NLTE = "T"                           # "T" = NLTE, "F" = LTE
-VMAC = 12.30
+TEFF = 4670                          # K
+LOGG = 1.20                          # dex (cgs)
+VMIC = 1.30                          # km/s
+FEH = -2.21                          # [Fe/H] of the atmosphere; also sets A(Fe) = 7.45 + FEH for the departure coeffs
+NLTE = "T"                          # "T" = NLTE, "F" = LTE
+VMAC = 6.5
 
 MASS = None                          # MARCS mass: None -> from `model_atmosphere` in stars.yaml (1.0 = spherical,
                                      # 0.0 = plane-parallel)
 RUN_NOTE = ""                        # what is special about this run, e.g. "vmic 1.8" / "alt linelist"; goes into summary.yaml
-LINE_FILE = None                    # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
+LINE_FILE = "data/selected_lines/TIC396792499/fe_II_kept_lines.csv"                     # None -> `selected_lines` in stars.yaml, else data/selected_lines/<star>/fe_kept_lines.csv
 FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitSettings in fe_line_fit.py
     n_jobs=10,
     half_window=0.8,                 # default fit region = line centre +/- this [A] at window_ref_wavelength, scaled
@@ -99,7 +116,7 @@ FIT_SETTINGS = FitSettings(          # all options and their meaning: class FitS
     cont_method="median_clip",       # "lsq": scale fitted with the line (prior cont_prior); "median_clip": c = clipped
                                      # median of obs/synth over pixels with synthetic depth < cont_depth_max, then
                                      # fixed (continuum pixels drawn in the plots; see FitSettings)
-    fit_region="window",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
+    fit_region="line",             # pixels in chi^2: "window" (+/- half_window), "line" (fit_left..fit_right of
                                      # the CSV) or "core" (+/- core_half_width, 0.04 A)
     a_step_warm=0.10,                # initial A(Fe) bracket half-width, when warm-started from a previous result
     a_tol=0.001,
@@ -133,6 +150,26 @@ KEEP_LINE_FILES = True               # keep lines/<line>/ (fit.png, bestfit.csv,
 # file; None -> fe_line_flags.yaml next to the line CSV. review_fits.py writes it.
 LINE_FLAGS_FILE = None
 ONLY_FLAGGED = False                 # True: fit only the flagged lines (run directory gets _flagged)
+
+# Automatic tuning of the stellar parameters (see the top of this file). False = one run at TEFF / LOGG / VMIC / FEH,
+# the manual way.
+AUTO_TUNE = False
+TUNE = dict(teff=True, logg=True, vmic=True, feh=True)   # False = fixed at the value above, its condition not used
+                                     # (e.g. Teff from the Balmer wings, logg from the parallax)
+VMIC_SLOPE = "switch"                # REW slope that sets vmic: "fe1" = Fe I lines only; "all" = Fe I + Fe II (plain
+                                     # fit, no offset); "switch" = Fe I until |A(Fe II) - A(Fe I)| < max(SWITCH_DA, its
+                                     # error), then Fe I + II for the rest of the tuning
+SWITCH_DA = 0.05                     # [dex]
+MAX_RUNS = 10                        # full line fits in total, finite-difference runs included
+FD_STEP = dict(teff=100.0, logg=0.20, vmic=0.20)         # finite-difference steps for the first Jacobian
+MAX_STEP = dict(teff=250.0, logg=0.40, vmic=0.40, feh=0.30)  # largest change per iteration (the step is scaled down)
+MIN_STEP = dict(teff=15.0, logg=0.03, vmic=0.03, feh=0.02)   # converged when the next step is smaller than this in
+                                     # every free parameter, or when TOL_NSIGMA holds ([Fe/H]: within MIN_STEP)
+TOL_NSIGMA = 1.0                     # converged when every condition is within TOL_NSIGMA x its error; None = only
+                                     # the MIN_STEP test
+BOUNDS = dict(teff=(3800, 7500), logg=(0.0, 5.0), vmic=(0.3, 3.5), feh=(-4.5, 0.5))   # logg <= 3.5 when spherical
+JACOBIAN_FROM = None                 # tune.yaml of an earlier tuning (e.g. before rejecting lines in review_fits.py):
+                                     # reuse its Jacobian and skip the finite-difference runs
 
 # The interpolator: interp_nlte_2.py is the copy of T. Merle's interp_nlte.py that reads INTERP_OPATH / INTERP_PLOT /
 # INTERP_INTERACTIVE from the environment; interpol_modeles_nlte (Fortran) sits next to it. The script expects st/s,
@@ -188,9 +225,11 @@ def _plain(v):
 
 def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: float, vmic: float, feh: float,
               nlte: str, mass: float, outdir: Path, settings: FitSettings,
-              flags: dict[str, str] | None = None, note: str = "") -> tuple[list[dict], dict]:
+              flags: dict[str, str] | None = None, note: str = "",
+              a_guess: dict[str, float] | None = None) -> tuple[list[dict], dict]:
     """Interpolate the atmosphere, fit every line, write lines.csv / summary.yaml / diagnostics.png to outdir.
-    `flags` (line_id -> reason): reasons starting with "reject" are left out of the summary, others are notes."""
+    `flags` (line_id -> reason): reasons starting with "reject" are left out of the summary, others are notes.
+    `a_guess` (line_id -> A(Fe)): warm start of the line fits (see fe_line_fit.fit_lines)."""
     flags = flags or {}
     if mass > 0 and logg > LOGG_MAX_SPHERICAL:
         raise SystemExit(f"logg = {logg} is beyond the spherical MARCS grid (max {LOGG_MAX_SPHERICAL}); "
@@ -202,7 +241,7 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
     print("Building atmosphere...  DONE")
 
     t0 = time.time()
-    rows = fit_lines(lines, atm, cfg, spectrum, outdir, settings=settings, nlte=nlte)
+    rows = fit_lines(lines, atm, cfg, spectrum, outdir, settings=settings, nlte=nlte, a_guess=a_guess)
     info = analyze(rows, settings, flags)
     for r, sel, flag in zip(rows, info["selection"], info["flag"]):
         r["selection"], r["flag"] = sel, flag
@@ -244,6 +283,302 @@ def run_point(cfg: StarConfig, lines: list[dict], spectrum, teff: float, logg: f
     )
     (outdir / "summary.yaml").write_text(yaml.dump(summary, sort_keys=False))
     return rows, info
+
+
+# ---------------------------------------------------------------------------
+# Run directories
+# ---------------------------------------------------------------------------
+
+def new_run_dir(cfg: StarConfig, flags: dict[str, str], teff: float, logg: float, vmic: float, feh: float,
+                nlte: str, suffix: str = "") -> Path:
+    """runs/<star>/fe_abundance/<time>_T.._g.._v.._z.._<NLTE|LTE><suffix>/ with config.yaml, the scripts and the flags."""
+    mode = "NLTE" if nlte == "T" else "LTE"
+    outdir = (RUNS_DIR / cfg.star / "fe_abundance" /
+              f"{time.strftime('%Y%m%d_%H%M%S')}_T{teff:.0f}_g{logg:.2f}_v{vmic:.2f}_z{feh:+.2f}_{mode}{suffix}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "config.yaml").write_text(yaml.dump(cfg.raw))
+    for f in (Path(__file__), Path(__file__).with_name("fe_line_fit.py")):
+        shutil.copy2(f, outdir / f.name)
+    save_line_flags(outdir / "fe_line_flags.yaml", flags)
+    return outdir
+
+
+# ---------------------------------------------------------------------------
+# Automatic tuning (AUTO_TUNE = True)
+# ---------------------------------------------------------------------------
+
+PARAMS = ("teff", "logg", "vmic", "feh")
+SCALE = dict(teff=100.0, logg=0.2, vmic=0.2, feh=0.1)    # the steps are solved in these units
+DIAG = ("slope_ep", "slope_rew", "slope_rew_all", "dA", "A1", "A2")   # results the Jacobian follows
+ROUND = dict(teff=0, logg=2, vmic=2, feh=2)
+
+
+def _diag(info: dict) -> np.ndarray:
+    return np.array([float(info[k]) for k in DIAG])
+
+
+def _conditions(info: dict, p: dict, free: list[str], use_all: bool) -> list[tuple[str, str, float, float]]:
+    """(parameter, what, value, error) of the condition that sets each free parameter; value 0 = satisfied."""
+    out = []
+    for q in free:
+        if q == "teff":
+            out.append((q, "slope_ep", info["slope_ep"], info["slope_ep_err"]))
+        elif q == "logg":
+            out.append((q, "dA", info["dA"], info["dA_err"]))
+        elif q == "vmic":
+            k = "slope_rew_all" if use_all else "slope_rew"
+            out.append((q, k, info[k], info[f"{k}_err"]))
+        else:
+            out.append((q, "A1-7.45-feh", info["A1"] - SOLAR_FE - p["feh"], info["e1"]))
+    return out
+
+
+def _condition_jacobian(J: np.ndarray, free: list[str], use_all: bool) -> np.ndarray:
+    """Rows of J (DIAG x PARAMS, scaled units) for the conditions of the free parameters, columns of the free ones."""
+    rows = []
+    for q in free:
+        if q == "feh":                    # A1 - 7.45 - feh: d/d(feh) gets -1 (in scaled units -SCALE)
+            r = J[DIAG.index("A1")].copy()
+            r[PARAMS.index("feh")] -= SCALE["feh"]
+        else:
+            r = J[DIAG.index({"teff": "slope_ep", "logg": "dA",
+                              "vmic": "slope_rew_all" if use_all else "slope_rew"}[q])]
+        rows.append(r)
+    return np.array(rows)[:, [PARAMS.index(q) for q in free]]
+
+
+def _converged_by_tolerance(conds) -> bool:
+    if TOL_NSIGMA is None:
+        return False
+    for q, _, v, e in conds:
+        lim = MIN_STEP["feh"] if q == "feh" else TOL_NSIGMA * e
+        if not (np.isfinite(v) and abs(v) <= lim):
+            return False
+    return True
+
+
+def _score(conds) -> float:
+    """Sum of (condition / error)^2 ([Fe/H]: in units of MIN_STEP), to pick the best run."""
+    return float(sum((v / (MIN_STEP["feh"] if q == "feh" else e)) ** 2 for q, _, v, e in conds))
+
+
+def _bounds(q: str, mass: float) -> tuple[float, float]:
+    lo, hi = BOUNDS[q]
+    if q == "logg" and mass > 0:
+        hi = min(hi, LOGG_MAX_SPHERICAL)
+    return lo, hi
+
+
+def _plot_tuning(log: list[dict], free: list[str], path: Path, title: str) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker
+    except ImportError:
+        return
+    n = np.arange(len(log))
+    kinds = [r["kind"] for r in log]
+    fig, axes = plt.subplots(2, 4, figsize=(15, 6.5), sharex=True)
+    for ax, q, unit in zip(axes[0], PARAMS, ("K", "dex", "km/s", "dex")):
+        ax.plot(n, [r[q] for r in log], "k-", lw=0.6)
+        for i, k in zip(n, kinds):
+            ax.plot(i, log[i][q], "s" if k.startswith("fd") else "o", color="0.5" if k.startswith("fd") else "tab:blue")
+        ax.set_title(f"{q} [{unit}]" + ("" if q in free else "  (fixed)"), fontsize=9)
+    labels = dict(teff="slope EP / err", logg="(Fe II - Fe I) / err", vmic="slope REW / err",
+                  feh="(A(Fe I) - 7.45 - [Fe/H]) / MIN_STEP")
+    for ax, q in zip(axes[1], PARAMS):
+        key = f"cond_{q}"
+        if q in free and key in log[0]:
+            y = [r[key] / (MIN_STEP["feh"] if q == "feh" else r[f"{key}_err"]) for r in log]
+            ax.plot(n, y, "k-", lw=0.6)
+            for i, k in zip(n, kinds):
+                ax.plot(i, y[i], "s" if k.startswith("fd") else "o",
+                        color="0.5" if k.startswith("fd") else "tab:red")
+            lim = 1.0 if q == "feh" else (TOL_NSIGMA or 1.0)
+            ax.axhspan(-lim, lim, color="tab:green", alpha=0.12, lw=0)
+            ax.axhline(0, color="k", lw=0.5)
+        if q == "vmic":
+            sw = [i for i in n if log[i]["vmic_slope"] == "all"]
+            if sw:
+                ax.axvline(sw[0] - 0.5, color="tab:purple", ls="--", lw=0.8, label="Fe I+II slope from here")
+                ax.legend(fontsize=7)
+        ax.set_title(labels[q], fontsize=9)
+        ax.set_xlabel("run (square = finite difference)")
+        ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+    fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def tune(cfg: StarConfig, lines: list[dict], spectrum, mass: float, flags: dict[str, str]) -> None:
+    free = [q for q in PARAMS if TUNE.get(q)]
+    if not free:
+        raise SystemExit("AUTO_TUNE: every parameter in TUNE is False, nothing to tune")
+    if VMIC_SLOPE not in ("fe1", "all", "switch"):
+        raise SystemExit(f"VMIC_SLOPE must be 'fe1', 'all' or 'switch', not {VMIC_SLOPE!r}")
+    mode = "NLTE" if NLTE == "T" else "LTE"
+    tdir = RUNS_DIR / cfg.star / "fe_tuning" / f"{time.strftime('%Y%m%d_%H%M%S')}_{mode}"
+    tdir.mkdir(parents=True, exist_ok=True)
+    print(f"AUTO_TUNE: free {', '.join(free)}; vmic from the {VMIC_SLOPE} REW slope; at most {MAX_RUNS} runs\n"
+          f"-> {tdir}")
+
+    log: list[dict] = []
+    use_all = VMIC_SLOPE == "all"
+    settings = dict(free=free, vmic_slope=VMIC_SLOPE, switch_da=SWITCH_DA, max_runs=MAX_RUNS, fd_step=FD_STEP,
+                    max_step=MAX_STEP, min_step=MIN_STEP, tol_nsigma=TOL_NSIGMA,
+                    bounds={q: list(v) for q, v in BOUNDS.items()},
+                    jacobian_from=str(JACOBIAN_FROM) if JACOBIAN_FROM else None,
+                    start=dict(teff=TEFF, logg=LOGG, vmic=VMIC, feh=FEH), nlte=NLTE, mass=mass, vmac=VMAC,
+                    note=RUN_NOTE)
+
+    def evaluate(p: dict, kind: str, guess: dict[str, float]) -> tuple[list[dict], dict]:
+        nonlocal use_all
+        k = len(log)
+        outdir = new_run_dir(cfg, flags, p["teff"], p["logg"], p["vmic"], p["feh"], NLTE, suffix=f"_tune{k:02d}")
+        print(f"\n=== tuning run {k} ({kind}): Teff={p['teff']:.0f} logg={p['logg']:.2f} vmic={p['vmic']:.2f} "
+              f"[Fe/H]={p['feh']:+.2f}\n-> {outdir}")
+        note = f"{RUN_NOTE} auto-tune {tdir.name}, run {k} ({kind})".strip()
+        rows, info = run_point(cfg, lines, spectrum, p["teff"], p["logg"], p["vmic"], p["feh"], NLTE, mass, outdir,
+                               FIT_SETTINGS, flags, note=note, a_guess=guess)
+        if VMIC_SLOPE == "switch" and not use_all and not kind.startswith("fd") and np.isfinite(info["dA"]) \
+                and abs(info["dA"]) < max(SWITCH_DA, info["dA_err"]):
+            use_all = True
+            print(f"  |Fe II - Fe I| = {abs(info['dA']):.3f} < {max(SWITCH_DA, info['dA_err']):.3f}: "
+                  f"vmic follows the Fe I + Fe II REW slope from now on")
+        conds = _conditions(info, p, free, use_all)
+        rec = dict(run=k, kind=kind, **{q: p[q] for q in PARAMS},
+                   **{f"{d}": _plain(info[d]) for d in DIAG},
+                   e1=_plain(info["e1"]), e2=_plain(info["e2"]), dA_err=_plain(info["dA_err"]),
+                   slope_ep_err=_plain(info["slope_ep_err"]), slope_rew_err=_plain(info["slope_rew_err"]),
+                   slope_rew_all_err=_plain(info["slope_rew_all_err"]),
+                   n_fe1=info["n_fe1"], n_fe2=info["n_fe2"], vmic_slope="all" if use_all else "fe1",
+                   **{f"cond_{q}": _plain(v) for q, _, v, _ in conds},
+                   **{f"cond_{q}_err": _plain(e) for q, _, _, e in conds},
+                   score=_score(conds), run_dir=str(outdir))
+        log.append(rec)
+        with (tdir / "tune_log.csv").open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rec.keys()))
+            w.writeheader()
+            w.writerows(log)
+        print("  " + "   ".join(f"{q}: {w_} = {v:+.4f} ({v / (MIN_STEP['feh'] if q == 'feh' else e):+.1f}"
+                                f"{' x MIN_STEP' if q == 'feh' else ' sigma'})" for q, w_, v, e in conds))
+        bad = [w_ for _, w_, v, e in conds if not (np.isfinite(v) and np.isfinite(e))]
+        if bad:
+            raise SystemExit(f"run {k}: {', '.join(bad)} not available (too few lines?); fix that parameter in TUNE")
+        return rows, info
+
+    def guesses(rows: list[dict], dA1: float = 0.0, dA2: float = 0.0) -> dict[str, float]:
+        return {r["line_id"]: float(r["A"]) + (dA1 if r["ion"] == 1 else dA2)
+                for r in rows if isinstance(r.get("A"), (int, float)) and np.isfinite(r["A"])}
+
+    def finish(status: str, message: str, current: dict, J: np.ndarray) -> None:
+        best = min(log, key=lambda r: r["score"])
+        cur = next((r for r in reversed(log) if all(r[q] == current[q] for q in PARAMS)), log[-1])
+        jac = {d: {q: _plain(J[i, j] / SCALE[q]) for j, q in enumerate(PARAMS)} for i, d in enumerate(DIAG)}
+        out = dict(star=cfg.star, status=status, message=message, runs=len(log),
+                   final={q: current[q] for q in PARAMS} | dict(run=cur["run"], run_dir=cur["run_dir"],
+                                                               A_FeI=cur["A1"], A_FeII=cur["A2"]),
+                   best={q: best[q] for q in PARAMS} | dict(run=best["run"], run_dir=best["run_dir"],
+                                                           score=best["score"]),
+                   vmic_slope_at_end="all" if use_all else "fe1",
+                   settings=settings,
+                   jacobian_per_unit=jac,            # d(result)/d(parameter), per K, dex, km/s, dex
+                   log=log)
+        (tdir / "tune.yaml").write_text(yaml.dump(out, sort_keys=False))
+        _plot_tuning(log, free, tdir / "tune.png",
+                     f"{cfg.star} {mode} auto-tune: {status} after {len(log)} runs ({message})")
+        print(f"\nAUTO_TUNE {status} after {len(log)} runs: {message}")
+        print(f"  final (run {cur['run']}): Teff = {current['teff']:.0f}  logg = {current['logg']:.2f}  "
+              f"vmic = {current['vmic']:.2f}  [Fe/H] = {current['feh']:+.2f}")
+        print(f"    A(Fe I) = {cur['A1']:.3f}  A(Fe II) = {cur['A2']:.3f}  slope EP {cur['slope_ep']:+.4f}  "
+              f"slope REW Fe I {cur['slope_rew']:+.4f}  Fe I+II {cur['slope_rew_all']:+.4f}")
+        if best["run"] != cur["run"]:
+            print(f"  lowest score: run {best['run']}: Teff = {best['teff']:.0f}  logg = {best['logg']:.2f}  "
+                  f"vmic = {best['vmic']:.2f}  [Fe/H] = {best['feh']:+.2f}")
+        print(f"  for stars.yaml (synthesis:):  teff: {current['teff']:.0f}  logg: {current['logg']:.2f}  "
+              f"feoh: {current['feh']:.2f}  vmic: {current['vmic']:.2f}")
+        print(f"  run: {cur['run_dir']}\n  tuning: {tdir}")
+
+    # --- start point
+    p = {q: round(float(v), ROUND[q]) for q, v in zip(PARAMS, (TEFF, LOGG, VMIC, FEH))}
+    for q in PARAMS:
+        lo, hi = _bounds(q, mass)
+        if not lo <= p[q] <= hi:
+            raise SystemExit(f"start value {q} = {p[q]} outside BOUNDS {lo}..{hi}")
+    rows0, info0 = evaluate(p, "start", {})
+    r0 = _diag(info0)
+
+    # --- first Jacobian (DIAG x PARAMS, per scaled unit)
+    J = np.zeros((len(DIAG), len(PARAMS)))
+    if JACOBIAN_FROM:
+        old = yaml.safe_load(resolve_path(JACOBIAN_FROM).read_text())["jacobian_per_unit"]
+        for i, d in enumerate(DIAG):
+            for j, q in enumerate(PARAMS):
+                J[i, j] = float(old[d][q]) * SCALE[q]
+        print(f"Jacobian from {JACOBIAN_FROM}")
+    else:
+        for q in (q for q in free if q != "feh"):
+            if len(log) >= MAX_RUNS:
+                finish("stopped", "MAX_RUNS reached during the finite-difference runs", p, J)
+                return
+            step = FD_STEP[q]
+            lo, hi = _bounds(q, mass)
+            if p[q] + step > hi:
+                step = -step
+            pq = dict(p, **{q: round(p[q] + step, ROUND[q])})
+            _, info_q = evaluate(pq, f"fd {q}", guesses(rows0))
+            J[:, PARAMS.index(q)] = (_diag(info_q) - r0) / ((pq[q] - p[q]) / SCALE[q])
+
+    # --- Newton / Broyden iterations from the start point
+    cur, cur_rows, cur_info, r_cur = p, rows0, info0, r0
+    while True:
+        conds = _conditions(cur_info, cur, free, use_all)
+        switch_pending = VMIC_SLOPE == "switch" and "vmic" in free and "logg" in free and not use_all
+        if _converged_by_tolerance(conds) and not switch_pending:
+            finish("converged", f"every condition within {TOL_NSIGMA:g} sigma "
+                                f"([Fe/H] within {MIN_STEP['feh']:g} dex)", cur, J)
+            return
+        c = np.array([v for _, _, v, _ in conds])
+        Jc = _condition_jacobian(J, free, use_all)
+        dx = np.linalg.lstsq(Jc, -c, rcond=None)[0]
+        d = {q: 0.0 for q in PARAMS}
+        for q, x in zip(free, dx):
+            d[q] = x * SCALE[q]
+        f = min([1.0] + [MAX_STEP[q] / abs(d[q]) for q in free if d[q]])
+        d = {q: v * f for q, v in d.items()}
+        if all(abs(d[q]) < MIN_STEP[q] for q in free) and not switch_pending:
+            finish("converged", "the next step is below MIN_STEP in every parameter", cur, J)
+            return
+
+        for attempt in range(3):              # a failed interpolation: halve the step, twice
+            new = {}
+            for q in PARAMS:
+                lo, hi = _bounds(q, mass)
+                new[q] = round(float(np.clip(cur[q] + d[q], lo, hi)), ROUND[q])
+            if new == cur:
+                finish("stalled", "the next step rounds to (or is clipped back to) the current point", cur, J)
+                return
+            if len(log) >= MAX_RUNS:
+                finish("stopped", "MAX_RUNS reached", cur, J)
+                return
+            dxs = np.array([(new[q] - cur[q]) / SCALE[q] for q in PARAMS])
+            pred = J @ dxs
+            try:
+                rows_n, info_n = evaluate(new, "newton", guesses(cur_rows, pred[DIAG.index("A1")],
+                                                                 pred[DIAG.index("A2")]))
+                break
+            except RuntimeError as err:
+                print(f"  run failed ({str(err).splitlines()[0]}); halving the step")
+                d = {q: v / 2 for q, v in d.items()}
+        else:
+            finish("failed", "three failed runs in a row (see the messages above)", cur, J)
+            return
+        r_new = _diag(info_n)
+        ok = np.isfinite(r_new) & np.isfinite(r_cur)
+        J[ok] += np.outer((r_new - r_cur - J @ dxs)[ok], dxs) / float(dxs @ dxs)     # Broyden update
+        cur, cur_rows, cur_info, r_cur = new, rows_n, info_n, r_new
 
 
 # ---------------------------------------------------------------------------
@@ -293,14 +628,14 @@ def main() -> None:
     n1 = sum(1 for r in lines if r["ion"] == 1)
     mode = "NLTE" if NLTE == "T" else "LTE"
 
-    outdir = (RUNS_DIR / SELECTED_STAR / "fe_abundance" /
-              f"{time.strftime('%Y%m%d_%H%M%S')}_"
-              f"T{TEFF:.0f}_g{LOGG:.2f}_v{VMIC:.2f}_z{FEH:+.2f}_{mode}{'_flagged' if ONLY_FLAGGED else ''}")
-    outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "config.yaml").write_text(yaml.dump(cfg.raw))
-    for f in (Path(__file__), Path(__file__).with_name("fe_line_fit.py")):
-        shutil.copy2(f, outdir / f.name)
-    save_line_flags(outdir / "fe_line_flags.yaml", flags)
+    if AUTO_TUNE:
+        if ONLY_FLAGGED:
+            raise SystemExit("AUTO_TUNE needs all lines: set ONLY_FLAGGED = False")
+        print(f"{SELECTED_STAR}: {len(lines)} lines ({n1} Fe I, {len(lines) - n1} Fe II), {mode}")
+        tune(cfg, lines, spectrum, mass, flags)
+        return
+
+    outdir = new_run_dir(cfg, flags, TEFF, LOGG, VMIC, FEH, NLTE, suffix="_flagged" if ONLY_FLAGGED else "")
 
     print(f"{SELECTED_STAR}: {len(lines)} lines ({n1} Fe I, {len(lines) - n1} Fe II), {mode}, "
           f"Teff={TEFF:.0f} logg={LOGG:.2f} vmic={VMIC:.2f} [Fe/H]={FEH:+.2f}\n-> {outdir}")

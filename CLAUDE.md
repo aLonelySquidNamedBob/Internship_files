@@ -31,7 +31,7 @@ git-ignored. Many past commits are PRs from Claude branches, so keep commit mess
 | `Turbospectrum_NLTE_20.1/` | Code + binaries: `exec-gf/{babsma_lu,bsyn_lu}`, `Utilities/faltbon`, `interpolator/`. Don't edit. |
 | `DATA/` | Turbospectrum data tables (Hlinedata, `nlte_infofile.dat`, ...). Scripts link it as `./DATA` in scratch dirs. |
 | `ll` -> `/home/student/GREG/test_tbs20/ll` | Symlink to atomic/molecular line lists (`ll/molecules/*.bsyn`, `nlte_ges_linelist_jmg6may2025_I_II`, GES lists). `line_lists/` and `TiO_ll/` are local copies / extra TiO lists (`ll`'s 47TiO is truncated, so line_lists.yaml points to `TiO_ll/`). |
-| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `<el>_abundance` (other elements), `synthesis`, `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
+| `runs/<star>/<kind>/<timestamp>_.../` | All outputs. Kinds: `fe_abundance`, `fe_tuning` (AUTO_TUNE logs), `<el>_abundance` (other elements), `synthesis`, `molecular_tests`, `balmer_wings`, `balmer_wings_hlines_only`, `abundance_tests`, `temperature_tests`. |
 | `log.txt` | Turbospectrum stdout/stderr from the older scripts (13 MB, overwritten). |
 
 ## The main pipeline: `synthesis_scripts/claude_abundance/`
@@ -50,8 +50,11 @@ All scripts: edit the **Settings block at the top** (`SELECTED_STAR`, parameters
   NLTE T/F, mass 1.0 spherical / 0.0 plane-parallel): interpolates atmosphere + DCs via `interp_nlte_3.py`
   (DC computed for A(Fe) = 7.45 + FEH), fits every Fe line, writes
   `runs/<star>/fe_abundance/<time>_T<teff>_g<logg>_v<vmic>_z<feh>_<NLTE|LTE>/` with `lines.csv`, `summary.yaml`,
-  `diagnostics.png`, `overview.png`, `lines/<line>/`, `atm/`, `config.yaml`. Nothing is iterated automatically:
+  `diagnostics.png`, `overview.png`, `lines/<line>/`, `atm/`, `config.yaml`. By default nothing is iterated:
   Teff/logg/vmic are tuned by hand by re-running (excitation balance, ionisation balance, no slope with REW).
+  `AUTO_TUNE = True` iterates Teff, logg, vmic and [Fe/H] (Newton on slope EP, slope REW (`VMIC_SLOPE`: Fe I, Fe I+II,
+  or switch to Fe I+II once |dA| is small), dA, [Fe/H] = A(Fe I) - 7.45; Jacobian from finite-difference runs, then
+  Broyden); each step is a normal `fe_abundance` run (`_tune<NN>`), the log goes to `runs/<star>/fe_tuning/`.
 - **`find_element_abundance.py`** + **`element_line_fit.py`**: the same line-by-line fit for any other element: that
   element in NLTE, everything else (Fe included) in LTE, because `LineSynth` lists only the fitted element in
   `nlte_infofile.dat`. The fit itself is imported from `fe_line_fit.py` (keep the fitting there, so every element gets it);

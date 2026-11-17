@@ -57,10 +57,10 @@ from element_line_fit import element_totals_text, load_element_config
 # Settings
 # ---------------------------------------------------------------------------
 
-SELECTED_STAR = "HD2454"
+SELECTED_STAR = "HD196944"
 ELEMENT = "Fe"                       # which runs: runs/<star>/<element>_abundance/ (--element on the command line wins)
 RUN_DIR = None                       # None -> newest run in runs/<star>/<element>_abundance/ (a command-line argument wins)
-REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "rerun: blended"]   # keys 1-3 (flag)
+REASONS = ["rerun: poor fit", "rerun: doubtful continuum normalisation", "reject: blended", "reject: too weak"]   # keys 1-3 (flag)
 
 
 # ---------------------------------------------------------------------------
